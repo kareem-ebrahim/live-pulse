@@ -8,9 +8,7 @@ A Claude Code mod plus a full-screen terminal dashboard for Windows Terminal: on
 session, every subagent wired to the files it edits, live diffs, commands and their output, and
 tool calls by kind — all from real hook events.
 
-<img src="media/demo.gif" alt="Live Pulse: every subagent as its own creature, wired to the files it edits" width="800">
-
-**[▶ Watch the full demo (1080p, 66 s)](https://github.com/kareem-ebrahim/live-pulse/releases/latest)**
+<!-- Drop video/out/live-pulse.mp4 here in the GitHub editor to embed the demo -->
 
 </div>
 
@@ -24,11 +22,10 @@ tool calls by kind — all from real hook events.
 | **Agents & files** | The selected session's main agent and every subagent, each as a creature with what it is doing right now — wired to the exact files it edits. A wire lights up and carries sparks while its file is being written. |
 | **Tool calls by kind, live** | Calls running now, a 60-second sparkline per kind, and totals. A kind flashes when a call starts and turns green or red when it ends. |
 | **Activity** | The selected session's events (or every session's): real diffs with context, commands and the first lines of their output, filtered by kind, agent or file. |
-| **Background shells & agents** | A shell, monitor or agent running in the background appears as its own creature while it runs, with its command, its latest output line, lines/KB written and how long it has been quiet. Click it to read its output live as it streams; when it ends it shows its exit code, then goes away. |
 | **Two sessions, one file** | When two sessions edit the same file, a red arc joins their creatures. A message from one session to another crosses the screen as a beam. |
 | **Notch-aware** | On a floating top taskbar, the window measures the islands over its top rows and flows its content around them, like a phone's notch. |
 
-A session you close leaves the screen. Everything is controlled with the mouse as well as the keyboard, and the window restarts itself
+Everything is controlled with the mouse as well as the keyboard, and the window restarts itself
 whenever its code is updated.
 
 ## How it works
@@ -43,7 +40,7 @@ Windows Terminal window ◀────────────── dashboard/
 ```
 
 - **`hooks/register.tsx`** — the mod. It hooks `turn.start`, `turn.step`, `tool.call`,
-  `agent.spawn`, `turn.complete`, `session.append` and `session.end`, and reads the context window from `$.session.usage()`.
+  `agent.spawn` and `turn.complete`, and reads the context window from `$.session.usage()`.
 - **`dashboard/`** — the renderer: a diffing true-colour cell buffer, wires with sparks, pixel
   creatures in half blocks, a small syntax highlighter and an LCS diff. Plain Node, no packages.
 - **`video/`** — renders the demo video from the dashboard's own drawing code.
@@ -52,7 +49,7 @@ Windows Terminal window ◀────────────── dashboard/
 
 Live Pulse **never records what you type**. It records what the session *does*: tool calls with
 their inputs (file paths, diffs, commands) and the first 20 lines of command output. Everything
-stays on your machine under `~/.claude/live-pulse`. Background shell output is read live from the file Claude Code already writes it to, and is never copied; the dashboard keeps the newest 600 events per
+stays on your machine under `~/.claude/live-pulse`; the dashboard keeps the newest 600 events per
 session and deletes sessions older than a day.
 
 ## Install
@@ -63,7 +60,7 @@ with mods (function hooks).
 At the prompt of a Claude Code session:
 
 ```
-/plugin install live-pulse --marketplace kareem-ebrahim/live-pulse
+/plugin install live-pulse --marketplace <owner>/live-pulse
 ```
 
 The dashboard opens by itself when a session starts. Or load it from a clone for every session by
@@ -72,6 +69,14 @@ adding this to `~/.claude/settings.json`:
 ```json
 "env": { "CLAUDE_CODE_PLUGIN_DIRS": "C:\\path\\to\\live-pulse" }
 ```
+
+### If the window does not open
+
+- **`error 2147942402 … node`** or a toast saying Node.js is missing: install Node.js
+  (`winget install OpenJS.NodeJS.LTS`), **restart the computer**, then run `/pulse`.
+- **`/plugin install` is not a command**: update Claude Code with `claude update`.
+- After installing, run `/reload-plugins` or restart Claude Code.
+- Update to the newest version with `/plugin update live-pulse`.
 
 ## Use
 
@@ -97,7 +102,7 @@ In the window — mouse or keys:
 ```
 cd video
 npm install
-npm run video            # → video/out/live-pulse.mp4 (1920×1080, 60 fps, with its own music)
+npm run video            # → video/out/live-pulse.mp4 (1920×1080, 30 fps)
 node make-video.mjs --stills 10,21,33    # single frames, for checking
 ```
 

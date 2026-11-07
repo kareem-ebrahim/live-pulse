@@ -317,6 +317,42 @@ async function locate($: EngineInterface, cwd: string): Promise<void> {
   }
 }
 
+const NO_NODE =
+  'Live Pulse needs Node.js: install it (winget install OpenJS.NodeJS.LTS), restart the computer, then run /pulse.'
+
+/**
+ * Node's full path. A terminal started by a process that began before Node was
+ * installed has no `node` on its PATH, so the window is launched by full path.
+ */
+async function findNode($: EngineInterface): Promise<string | undefined> {
+  try {
+    const r = await $.process.run(['where.exe', 'node'], { timeoutMs: 5000 })
+    const hit = r.stdout
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .find(l => /node\.exe$/i.test(l))
+    if (r.exitCode === 0 && hit) return hit
+  } catch {
+    // no where.exe: try the usual places below
+  }
+  const home = io.dir.replace(/\/\.claude\/live-pulse$/, '')
+  const places = [
+    'C:/Program Files/nodejs/node.exe',
+    'C:/Program Files (x86)/nodejs/node.exe',
+    `${home}/AppData/Local/Programs/nodejs/node.exe`,
+    `${home}/scoop/apps/nodejs-lts/current/node.exe`,
+    `${home}/scoop/apps/nodejs/current/node.exe`,
+  ]
+  for (const p of places) {
+    try {
+      if (await $.fs.exists(p)) return p
+    } catch {
+      // keep looking
+    }
+  }
+  return undefined
+}
+
 /** Opens the dashboard in a window of its own, unless one is already up. */
 async function launchWindow($: EngineInterface): Promise<string> {
   if (!io.dir) return 'no home folder found'
@@ -327,9 +363,14 @@ async function launchWindow($: EngineInterface): Promise<string> {
     // no window yet
   }
   const script = `${$.plugin.root.split('\\').join('/')}/dashboard/run.mjs`
+  const node = await findNode($)
+  if (!node) {
+    $.ui.toast(NO_NODE)
+    return NO_NODE
+  }
   try {
     const r = await $.process.run(
-      ['wt.exe', '-w', 'new', '--focus', '--pos', '0,0', 'new-tab', '--title', 'Live Pulse', '--suppressApplicationTitle', 'node', script],
+      ['wt.exe', '-w', 'new', '--focus', '--pos', '0,0', 'new-tab', '--title', 'Live Pulse', '--suppressApplicationTitle', node, script],
       { timeoutMs: 15000 },
     )
     if (r.exitCode === 0) return 'opened'
@@ -337,7 +378,7 @@ async function launchWindow($: EngineInterface): Promise<string> {
     // no Windows Terminal: fall back below
   }
   try {
-    await $.process.run(['cmd.exe', '/c', 'start', 'Live Pulse', 'node', script], { timeoutMs: 15000 })
+    await $.process.run(['cmd.exe', '/c', 'start', 'Live Pulse', node, script], { timeoutMs: 15000 })
     return 'opened'
   } catch (err) {
     return `could not open a window: ${String(err)}`
