@@ -25,7 +25,9 @@ tool calls by kind — all from real hook events.
 | **Tool calls by kind, live** | Calls running now, a 60-second sparkline per kind, and totals. A kind flashes when a call starts and turns green or red when it ends. |
 | **Activity** | The selected session's events (or every session's): real diffs with context, commands and the first lines of their output, filtered by kind, agent or file. |
 | **Background shells & agents** | A shell, monitor or agent running in the background appears as its own creature while it runs, with its command, its latest output line, lines/KB written and how long it has been quiet. Click it to read its output live as it streams; when it ends it shows its exit code, then goes away. |
-| **Two sessions, one file** | When two sessions edit the same file, a red arc joins their creatures. A message from one session to another crosses the screen as a beam. |
+| **Cost and plan limits** | Every session shows what it has cost so far, the header adds them up, and the session panel shows your plan's 5-hour and weekly limits with the time until each resets. |
+| **One session per file** | When two sessions edit the same file at once, the second waits a few seconds for the first to finish (it shows ◷ and who it waits for), so their edits never overwrite each other. A session holds a file only while it edits it: 25 seconds after its last edit, or when its turn ends. |
+| **Two sessions, one file** | When two sessions edit the same file, a red arc joins their creatures, and says which one is waiting. A message from one session to another crosses the screen as a beam. |
 
 A session you close leaves the screen. Everything is controlled with the mouse as well as the keyboard, and the window restarts itself
 whenever its code is updated.

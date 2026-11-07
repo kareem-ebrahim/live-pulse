@@ -109,6 +109,16 @@ export function poll(now, force = false) {
   if (now - lastTidy > 10000) {
     lastTidy = now
     for (const st of keep) trimEvents(st.sessionId)
+    // file leases older than ten minutes are spent
+    try {
+      const LOCKS = path.join(DIR, 'locks')
+      for (const f of fs.readdirSync(LOCKS)) {
+        const p = path.join(LOCKS, f)
+        if (now - fs.statSync(p).mtimeMs > 600000) fs.rmSync(p, { force: true })
+      }
+    } catch {
+      // no leases yet
+    }
   }
 }
 
@@ -364,4 +374,15 @@ export function bgOutput(b, now = Date.now()) {
   const out = { at: now, size: st.size, mtime: st.mtimeMs, lines: lines.slice(-400), total: Math.max(total, lines.length), bytes: st.size }
   outCache.set(b.out, out)
   return out
+}
+
+/** The account's plan-limit windows, from the session that reported them last. */
+export function planLimits() {
+  const withLimits = store.sessions.filter(s => Array.isArray(s.limits) && s.limits.length).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return withLimits[0]?.limits ?? []
+}
+
+/** What the sessions on screen have cost together. */
+export function totalCost(sessions = store.sessions) {
+  return sessions.reduce((n, s) => n + (Number(s.costUsd) || 0), 0)
 }

@@ -41,6 +41,10 @@ const io = {
   lastWrite: 0,
   ctxWindow: 0,
   ctxPct: 0,
+  costUsd: 0,
+  limits: [] as { kind: string; percentUsed: number; resetsAt?: string }[],
+  waiting: undefined as { file: string; owner: string; since: number } | undefined,
+  held: new Set<string>(),
   ended: false,
   seq: 0,
   writing: false,
@@ -222,12 +226,101 @@ function noteFile(run: PulseToolRun, input: Record<string, unknown>, agent: Puls
   return f
 }
 
+// ── one session at a time per file ─────────────────────────────────────────
+// A session that edits a file holds it for LEASE_MS after its last edit (or
+// until its turn ends). Another session that wants to edit the same file
+// waits for it, up to WAIT_MAX_MS, so their edits never interleave.
+const LEASE_MS = 25000
+const WAIT_MAX_MS = 90000
+
+function hashOf(text: string): string {
+  let h = 5381
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0
+  return h.toString(36)
+}
+
+const lockFile = (abs: string) => `${io.dir}/locks/${hashOf(abs)}.json`
+
+interface Lease {
+  session: string
+  project: string
+  file: string
+  at: number
+  released?: boolean
+}
+
+async function readLease($: EngineInterface, abs: string): Promise<Lease | undefined> {
+  try {
+    return JSON.parse(await $.fs.read(lockFile(abs))) as Lease
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether the session holding a lease still runs: its snapshot is fresh and not ended. */
+async function holderAlive($: EngineInterface, session: string): Promise<boolean> {
+  try {
+    const snap = JSON.parse(await $.fs.read(`${io.dir}/sessions/${session}.json`)) as { updatedAt?: number; ended?: boolean }
+    return !snap.ended && Date.now() - (snap.updatedAt ?? 0) < 12000
+  } catch {
+    return false
+  }
+}
+
+async function holdFile($: EngineInterface, abs: string, rel: string): Promise<void> {
+  const project = io.cwd.split(/[\/]/).filter(Boolean).pop() ?? ''
+  try {
+    await $.fs.write(lockFile(abs), JSON.stringify({ session: io.sessionId, project, file: rel, at: Date.now() } satisfies Lease))
+    io.held.add(abs)
+  } catch {
+    // without a lease the edit still goes ahead
+  }
+}
+
+/** Waits while another live session holds the file; returns how long it waited. */
+async function waitForFile($: EngineInterface, abs: string, rel: string): Promise<number> {
+  const start = Date.now()
+  while (Date.now() - start < WAIT_MAX_MS) {
+    const l = await readLease($, abs)
+    const busy = l && !l.released && l.session !== io.sessionId && Date.now() - l.at < LEASE_MS && (await holderAlive($, l.session))
+    if (!busy) break
+    if (!io.waiting) {
+      io.waiting = { file: rel, owner: l!.project || l!.session.slice(0, 8), since: start }
+      log('main', 'warn', `waiting for ${rel}: ${io.waiting.owner} is editing it`, 'waiting', 'warn')
+      touch()
+      await flush($)
+    }
+    await $.clock.sleep(1000)
+  }
+  const waited = Date.now() - start
+  if (io.waiting) {
+    io.waiting = undefined
+    log('main', 'ok', `${rel} is free after ${secs(waited)}`, 'go', 'ok')
+    touch()
+  }
+  return waited
+}
+
+async function releaseFiles($: EngineInterface): Promise<void> {
+  for (const abs of io.held) {
+    const l = await readLease($, abs)
+    if (l && l.session === io.sessionId) {
+      try {
+        await $.fs.write(lockFile(abs), JSON.stringify({ ...l, released: true }))
+      } catch {
+        // it expires by itself
+      }
+    }
+  }
+  io.held.clear()
+}
+
 async function flush($: EngineInterface): Promise<void> {
   ticks += 1
   const now = Date.now()
-  while (rateWindow.length > 0 && now - rateWindow[0][0] > 3000) rateWindow.shift()
+  while (rateWindow.length > 0 && now - rateWindow[0]![0] > 3000) rateWindow.shift()
   const sum = rateWindow.reduce((s, [, n]) => s + n, 0)
-  const span = rateWindow.length > 1 ? Math.max(500, now - rateWindow[0][0]) : 1000
+  const span = rateWindow.length > 1 ? Math.max(500, now - rateWindow[0]![0]) : 1000
   const rate = now - lastChunkAt > 2500 ? 0 : Math.round((sum / span) * 1000)
   if (rate !== live.rate) {
     live.rate = rate
@@ -263,6 +356,10 @@ async function flush($: EngineInterface): Promise<void> {
       }
       io.ctxWindow = u.context.window
       io.ctxPct = u.context.percent ?? (u.context.window ? Math.round((live.context / u.context.window) * 100) : 0)
+      const usd = u.cost?.usd ?? 0
+      if (Math.abs(usd - io.costUsd) >= 0.001) dirty = true
+      io.costUsd = usd
+      io.limits = (u.rateLimits ?? []).map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt }))
     } catch {
       // keep the last figures
     }
@@ -285,6 +382,9 @@ async function flush($: EngineInterface): Promise<void> {
           updatedAt: now,
           ctxWindow: io.ctxWindow,
           ctxPct: io.ctxPct,
+          costUsd: io.costUsd,
+          limits: io.limits,
+          waiting: io.waiting,
           ended: io.ended,
         }),
       )
@@ -535,7 +635,14 @@ export const register: Register = on => {
     void emit($, { kind: 'call', id: run.id, agent: card?.key, src: src0, tone: tone0, tool, cat: run.cat, label: run.label, ...codeOf(tool, input) })
     kick($)
 
+    // another session editing the same file right now: let it finish first
+    if (file?.abs) {
+      await waitForFile($, file.abs, file.path)
+      await holdFile($, file.abs, file.path)
+    }
+
     const ran = await next(e)
+    if (file?.abs) await holdFile($, file.abs, file.path)
 
     run.ms = Date.now() - run.started
     run.ok = ran.deny === undefined && ran.isError !== true
@@ -631,6 +738,7 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId) {
+      await releaseFiles($)
       live.phase = 'idle'
       live.lastTurnMs = e.durationMs
       live.activity = ''
@@ -661,7 +769,7 @@ export const register: Register = on => {
       let m: RegExpExecArray | null
       while ((m = re.exec(text))) {
         const code = (m[3] ?? '').match(/exit code (-?\d+)/)?.[1]
-        bgEnd(m[1].trim(), m[2].trim(), code === undefined ? undefined : Number(code))
+        bgEnd(m[1]!.trim(), m[2]!.trim(), code === undefined ? undefined : Number(code))
       }
     }
     return next(e)
@@ -690,6 +798,7 @@ export const register: Register = on => {
     io.ended = true
     live.phase = 'idle'
     dirty = true
+    await releaseFiles($)
     await flush($)
 
     return next(e)

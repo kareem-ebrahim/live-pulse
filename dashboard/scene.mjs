@@ -1,8 +1,8 @@
 // The dashboard's drawing: everything one frame shows, from the state in
 // data.mjs. The live window (pulse-dash.mjs) and the video tool both draw
 // through frame(); neither needs the other.
-import { CAT_COLOR, P, SPIN, clamp, clock, fit, kfmt, len, mix, pretty, projectName, secs } from './common.mjs'
-import { accentOf, allItems, callsPerMinute, ctxPct, focused, liveSessions, stateOf, store } from './data.mjs'
+import { CAT_COLOR, P, SPIN, clamp, clock, fit, kfmt, len, limitName, mix, pretty, projectName, secs, usd } from './common.mjs'
+import { accentOf, allItems, callsPerMinute, ctxPct, focused, liveSessions, planLimits, stateOf, store, totalCost } from './data.mjs'
 import { win } from './window.mjs'
 import { Screen, centerX } from './screen.mjs'
 import { drawConstellation } from './views/constellation.mjs'
@@ -53,6 +53,10 @@ function headerParts(now) {
   return [
     [['CLAUDE CODE LIVE', P.text, true]],
     [[`${live.length} SESSION${live.length === 1 ? '' : 'S'}`, P.opus, true]],
+    [[`${usd(totalCost(live))} SPENT`, P.cream, true]],
+    ...planLimits()
+      .filter(l => l.kind === 'five_hour')
+      .map(l => [[`${limitName(l.kind).toUpperCase()} ${Math.round(l.percentUsed)}%`, l.percentUsed >= 85 ? P.err : l.percentUsed >= 60 ? P.warn : P.haiku, true]]),
     [[`${working.length} WORKING`, working.length ? P.router : P.mid, true]],
     [[`${cpm} CALLS/MIN`, P.peach, true]],
     [[`${agents} SUBAGENTS`, P.haiku, true]],

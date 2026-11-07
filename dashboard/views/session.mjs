@@ -25,6 +25,9 @@ import {
   secs,
   tw,
   two,
+  usd,
+  limitName,
+  resetIn,
   winPath,
 } from '../common.mjs'
 import { accentOf, callsPerMinute, ctxLabel, ctxPct, kindStats, stateOf } from '../data.mjs'
@@ -263,6 +266,14 @@ export function drawSession(S, st, top, bot, t, now, anchor) {
     const tot = st.cacheRead + st.cacheWrite + st.inTok
     stat('cache hit', `${tot ? Math.round((st.cacheRead / tot) * 100) : 0}%`, P.router)
     stat('tokens out', kfmt(st.outTok))
+    stat('cost', usd(st.costUsd), P.cream)
+    for (const l of st.limits || []) {
+      const c = l.percentUsed >= 85 ? P.err : l.percentUsed >= 60 ? P.warn : P.haiku
+      stat(`${limitName(l.kind)} limit`, `${Math.round(l.percentUsed)}%${l.resetsAt ? ' · ' + resetIn(l.resetsAt) : ''}`, c)
+    }
+    if (st.waiting) {
+      S.segs(Lx + 4, y++, [['◷ waiting ', P.warn, true], [fitTail(`${st.waiting.file} (${st.waiting.owner})`, li - 12), P.warn]])
+    }
     y++
     const files = st.files || []
     const editing = files.filter(f => f.active).length

@@ -2,7 +2,7 @@
 // context window; wires join neighbours and carry sparks when a session acts;
 // a red arc joins two sessions editing the same file; a beam crosses when one
 // session messages another.
-import { P, SPIN, clamp, fit, fitTail, kfmt, len, mix, projectName } from '../common.mjs'
+import { P, SPIN, clamp, fit, fitTail, kfmt, len, mix, projectName, usd } from '../common.mjs'
 import { accentOf, conflicts, ctxPct, lastEventAt, messages, stateOf, store, visibleBg } from '../data.mjs'
 import { creature } from '../pixels.mjs'
 import { Wires, curve, sparks } from '../wires.mjs'
@@ -67,14 +67,17 @@ export function drawConstellation(S, x, y, w, h, t, now, focusId) {
     const sw = STATE_WORD[state] + (busy ? ' ' + SPIN[Math.floor(t * 12 + i) % 10] : '')
     S.segs(tx, y + cRows, [['● ', ac, true, bg], [fit(projectName(st.cwd), tw - len(sw) - 3), isF ? P.cream : P.text, true, bg]])
     S.text(tx + tw - len(sw), y + cRows, sw, STATE_COLOR[state] ?? P.mid, { bold: true, bg })
-    const ctxTxt = st.ctxWindow ? `${pct}% · ${kfmt(st.context)}/${kfmt(st.ctxWindow)}` : st.context ? kfmt(st.context) : 'ctx —'
+    const cost = st.costUsd ? ` · ${usd(st.costUsd)}` : ''
+    const ctxTxt = (st.ctxWindow ? `${pct}% · ${kfmt(st.context)}` : st.context ? kfmt(st.context) : '—') + cost
     const cells = clamp(tw - len(ctxTxt) - 5, 4, 12)
     S.text(tx, y + cRows + 1, 'ctx ', P.dim, { bg })
     for (let k = 0; k < cells; k++) S.set(tx + 4 + k, y + cRows + 1, k < Math.round((pct / 100) * cells) ? '▰' : '▱', k < Math.round((pct / 100) * cells) ? ringColor : P.faint, bg)
     S.text(tx + 5 + cells, y + cRows + 1, ctxTxt, P.text, { bold: true, bg })
     const editing = (st.files || []).find(f => f.active)
     const runTool = [...(st.tools || [])].reverse().find(r => r.ms === undefined)
-    const line3 = editing
+    const line3 = st.waiting
+      ? [['◷ ', P.warn, true, bg], [fitTail(`${st.waiting.file} · ${st.waiting.owner} has it`, tw - 2), P.warn, true, bg]]
+      : editing
       ? [['✎ ', P.coral, true, bg], [fitTail(editing.path, tw - 2), P.coral, false, bg]]
       : runTool
         ? [[SPIN[Math.floor(t * 12) % 10] + ' ', P.peach, true, bg], [fit(`${runTool.tool} · ${runTool.label || ''}`, tw - 2), P.text, false, bg]]
@@ -104,7 +107,12 @@ export function drawConstellation(S, x, y, w, h, t, now, focusId) {
     const pulse = 0.5 + 0.5 * Math.sin(t * 6)
     const color = mix(P.err, P.warn, pulse * 0.3)
     curve(S, [a.g.cx, y], [Math.round((a.g.cx + b.g.cx) / 2), y - 3], [b.g.cx, y], color, t, { spark: P.err, speed: 20, end: false, fade: 0.1 })
-    const label = ` ⚠ both editing ${fitTail(c.path, 40)} `
+    const sa = store.sessions.find(s => s.sessionId === c.a)
+    const sb = store.sessions.find(s => s.sessionId === c.b)
+    const waiter = sa?.waiting ? sa : sb?.waiting ? sb : undefined
+    const label = waiter
+      ? ` ◷ ${projectName(waiter.cwd)} waits for ${waiter.waiting.owner} · ${fitTail(c.path, 30)} `
+      : ` ⚠ both editing ${fitTail(c.path, 40)} `
     S.text(Math.round((a.g.cx + b.g.cx) / 2) - Math.floor(len(label) / 2), y - 1, label, P.err, { bold: true, bg: P.bg })
   }
 

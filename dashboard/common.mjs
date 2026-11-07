@@ -109,6 +109,29 @@ export function clock(t) {
   const d = new Date(t)
   return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
 }
+/** Dollars: $0.42, $3.10, $12.4, $128 */
+export function usd(n) {
+  const v = Number(n) || 0
+  if (v < 10) return '$' + v.toFixed(2)
+  if (v < 100) return '$' + v.toFixed(1)
+  return '$' + Math.round(v)
+}
+
+/** A plan-limit window's short name: 5h, week, spend. */
+export function limitName(kind) {
+  return kind === 'five_hour' ? '5h' : kind === 'seven_day' ? 'week' : kind === 'spend_limit' ? 'spend' : kind
+}
+
+/** How long until a window resets: 2h 14m, 3d 4h, 45m. */
+export function resetIn(iso, now = Date.now()) {
+  if (!iso) return ''
+  const ms = new Date(iso).getTime() - now
+  if (!(ms > 0)) return 'now'
+  const h = Math.floor(ms / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  return h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h ? `${h}h ${m}m` : `${m}m`
+}
+
 export function kfmt(n) {
   n = Math.round(n || 0)
   if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M'
