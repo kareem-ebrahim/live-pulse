@@ -88,11 +88,14 @@ From now on every Claude Code session you open appears in the same window.
 
 ### Update
 
+Close Claude Code, then in PowerShell (outside Claude Code):
+
 ```
-/plugin update live-pulse
+claude plugin marketplace update live-pulse
+claude plugin update live-pulse@live-pulse
 ```
 
-then close Claude Code and open it again.
+Open Claude Code again. `claude plugin list` shows the version you have.
 
 ### If the window does not open
 
