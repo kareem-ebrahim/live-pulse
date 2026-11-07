@@ -4,11 +4,11 @@
 // No dependencies.
 //
 //   node pulse-dash.mjs                                the live window
-//   node pulse-dash.mjs --html out.html --size 200x56 [--notch "a-b:d,..."]
+//   node pulse-dash.mjs --html out.html --size 200x56
 //
 // Keys: Tab / Shift+Tab session · a follow active · l full log · ←→ 1-9 log tabs
 //       ↑↓ PgUp PgDn Home End log · f follow newest · m / M next / previous monitor
-//       w window / full screen · n measure the notch again · q quit
+//       w window / full screen · q quit
 // Mouse: the three dots (quit · window · next monitor), creatures, tabs, rows; wheel scrolls.
 
 import fs from 'node:fs'
@@ -16,7 +16,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ALIVE, SESS, focused, poll, store } from './data.mjs'
 import { MOUSE_OFF, MOUSE_ON, parseInput } from './input.mjs'
-import { calibrate, fakeIslands, minimize, notch, place, startNotch, stopNotch, watch } from './notch.mjs'
+import { minimize, place, startWindow, stopWindow, watch, win } from './window.mjs'
 import { actions, cycleSession, frame, toggleFull, ui } from './scene.mjs'
 import { Screen } from './screen.mjs'
 import { logKey, logUi } from './views/log.mjs'
@@ -33,7 +33,6 @@ if (opt('--html')) {
   const S = new Screen(w, h)
   if (opt('--pick')) store.pinned = opt('--pick')
   if (argv.includes('--full-log')) ui.fullLog = true
-  if (opt('--notch')) fakeIslands(opt('--notch'), w)
   if (opt('--shell')) logUi.bg = opt('--shell')
   poll(Date.now(), true)
   for (let i = 0; i < 40; i++) frame(S, Number(opt('--t') || 3.3), Date.now())
@@ -65,7 +64,7 @@ function quit() {
   } catch {
     // already gone
   }
-  stopNotch()
+  stopWindow()
   out.write(MOUSE_OFF + '\x1b[0m\x1b[?25h\x1b[?1049l')
   process.exit(0)
 }
@@ -75,9 +74,8 @@ process.on('SIGTERM', quit)
 const size = () => ({ w: S.w, h: S.h })
 actions.quit = quit
 actions.minimize = minimize
-actions.window = () => void place(notch.cover ? 'win' : 'cur', size)
-actions.monitor = () => void place('next', size)
-actions.notch = () => void place(notch.cover ? 'cur' : 'win', size)
+actions.window = () => void place(win.cover ? 'win' : 'cur')
+actions.monitor = () => void place('next')
 
 if (process.stdin.isTTY) {
   process.stdin.setRawMode(true)
@@ -108,16 +106,13 @@ if (process.stdin.isTTY) {
           toggleFull()
           break
         case 'm':
-          void place('next', size)
+          void place('next')
           break
         case 'M':
-          void place('prev', size)
+          void place('prev')
           break
         case 'w':
           actions.window()
-          break
-        case 'n':
-          void place(notch.cover ? 'cur' : 'win', size)
           break
         default:
           logKey(ev.key)
@@ -126,19 +121,16 @@ if (process.stdin.isTTY) {
   })
 }
 
-let resizeTimer
 out.on('resize', () => {
   S = new Screen(out.columns, out.rows)
   out.write('\x1b[2J')
-  clearTimeout(resizeTimer)
-  resizeTimer = setTimeout(() => void calibrate(size), 600)
 })
 
-// Fill the monitor's work area (never under a docked taskbar), then find its islands; keep watching.
-if (startNotch()) {
+// Fill the monitor's free area (never under the taskbar); keep watching for moves.
+if (startWindow()) {
   void (async () => {
-    await place('cur', size)
-    setInterval(() => void watch(size), 2500)
+    await place('cur')
+    setInterval(() => void watch(), 2500)
   })()
 }
 
@@ -164,7 +156,7 @@ setInterval(() => {
   setTimeout(() => {
     clearInterval(hb)
     clearInterval(loop)
-    stopNotch()
+    stopWindow()
     out.write(MOUSE_OFF + '\x1b[0m\x1b[?25h\x1b[?1049l')
     process.exit(75)
   }, 400) // let a copy in progress finish

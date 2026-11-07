@@ -1,22 +1,12 @@
-# live-pulse window helper: places the dashboard window on a monitor and finds
-# what the taskbar draws over its top rows.
+# live-pulse window helper: places the dashboard window and minimises it.
 # Reads one command per line on stdin, answers one JSON line on stdout:
-#   place cur|next|prev|win  -> cover the window's monitor / the next / the previous one,
+#   place cur|next|prev|win  -> fill the free area of the window's monitor / the next / the previous one,
 #                               or (win) a normal window, 3/4 of its monitor, centred
-#   cal <cols> <rows> <band> -> screenshot of the window's monitor; finds the 3 calibration
-#                               markers and, in the top <band> rows, every cell that is not
-#                               the calibration colour
-#   rect                     -> the window's rect, its monitor's work area, in front, minimised
+#   rect                     -> the window's rect, its monitor's free area, in front, minimised
 #   min                      -> minimise the window
-#   sig                      -> a signature of the taskbar's layout
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+Add-Type -TypeDefinition @"
 using System;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
@@ -83,14 +73,6 @@ public static class PulseWin {
     return mi.rcWork;
   }
 
-  /** Whether a taskbar can draw over the window: it reserves no space on this monitor (floating, auto-hide). */
-  static bool Overlaid(IntPtr h) {
-    MONITORINFO mi = new MONITORINFO();
-    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-    GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
-    return mi.rcWork.T == mi.rcMonitor.T && mi.rcWork.B == mi.rcMonitor.B && mi.rcWork.L == mi.rcMonitor.L && mi.rcWork.R == mi.rcMonitor.R;
-  }
-
   static string R(RECT r) { return "\"x\":" + r.L + ",\"y\":" + r.T + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T); }
 
   public static string Place(string title, string mode) {
@@ -131,103 +113,13 @@ public static class PulseWin {
     int idx = 0;
     for (int i = 0; i < mons.Count; i++) if (mons[i].L == m.L && mons[i].T == m.T) idx = i;
     return "{\"ok\":true," + R(r) + ",\"mx\":" + m.L + ",\"my\":" + m.T + ",\"mw\":" + (m.R - m.L) + ",\"mh\":" + (m.B - m.T) +
-      ",\"monitor\":" + idx + ",\"monitors\":" + mons.Count + ",\"overlaid\":" + (Overlaid(h) ? "true" : "false") +
+      ",\"monitor\":" + idx + ",\"monitors\":" + mons.Count +
       ",\"front\":" + (GetForegroundWindow() == h ? "true" : "false") + ",\"min\":" + (IsIconic(h) ? "true" : "false") + "}";
   }
 
-  static bool Mag(byte r, byte g, byte b) { return r > 170 && g < 110 && b > 170; }
-
-  public static string Calibrate(string title, int cols, int rows, int band) {
-    IntPtr hw = Find(title);
-    if (hw == IntPtr.Zero) return "{\"ok\":false,\"why\":\"window not found\"}";
-    RECT mon = MonitorOf(hw);
-    int W = mon.R - mon.L, H = mon.B - mon.T;
-    byte[] px;
-    int stride;
-    using (Bitmap bmp = new Bitmap(W, H, PixelFormat.Format32bppArgb)) {
-      using (Graphics g = Graphics.FromImage(bmp)) g.CopyFromScreen(mon.L, mon.T, 0, 0, new Size(W, H));
-      BitmapData d = bmp.LockBits(new Rectangle(0, 0, W, H), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-      stride = d.Stride;
-      px = new byte[stride * H];
-      Marshal.Copy(d.Scan0, px, 0, px.Length);
-      bmp.UnlockBits(d);
-    }
-    Func<int, int, bool> m = delegate (int x, int y) { int i = y * stride + x * 4; return Mag(px[i + 2], px[i + 1], px[i]); };
-
-    // Markers in the lower half: A (col 1, row rows-2) and C (col 1, row rows-5) left, B (col cols-2, row rows-2) right.
-    int half = W / 2;
-    List<int> leftRows = new List<int>();
-    int[] leftMinX = new int[H];
-    int bTop = -1, bLeft = int.MaxValue;
-    for (int y = H / 2; y < H; y++) {
-      leftMinX[y] = int.MaxValue;
-      for (int x = 0; x < W; x++) {
-        if (!m(x, y)) continue;
-        if (x < half) { if (leftMinX[y] == int.MaxValue) leftRows.Add(y); if (x < leftMinX[y]) leftMinX[y] = x; }
-        else { if (bTop < 0) bTop = y; if (x < bLeft) bLeft = x; }
-      }
-    }
-    if (leftRows.Count == 0 || bTop < 0) return "{\"ok\":false,\"why\":\"markers not found\"}";
-    List<int[]> runs = new List<int[]>();
-    int start = leftRows[0], prev = leftRows[0];
-    for (int k = 1; k < leftRows.Count; k++) {
-      if (leftRows[k] != prev + 1) { runs.Add(new int[] { start, prev }); start = leftRows[k]; }
-      prev = leftRows[k];
-    }
-    runs.Add(new int[] { start, prev });
-    if (runs.Count < 2) return "{\"ok\":false,\"why\":\"marker C not found\"}";
-    int cTop = runs[0][0], aTop = runs[runs.Count - 1][0];
-    int aLeft = int.MaxValue;
-    for (int y = runs[runs.Count - 1][0]; y <= runs[runs.Count - 1][1]; y++) if (leftMinX[y] < aLeft) aLeft = leftMinX[y];
-    double cellH = (aTop - cTop) / 3.0;
-    double cellW = (bLeft - aLeft) / (double)(cols - 3);
-    if (cellH < 4 || cellW < 3) return "{\"ok\":false,\"why\":\"cell size\"}";
-    double ox = aLeft - cellW;
-    double oy = aTop - (rows - 2) * cellH;
-
-    System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
-    StringBuilder sb = new StringBuilder();
-    sb.Append("{\"ok\":true,\"cellW\":" + cellW.ToString("0.###", inv) + ",\"cellH\":" + cellH.ToString("0.###", inv));
-    sb.Append(",\"ox\":" + Math.Round(ox) + ",\"oy\":" + Math.Round(oy) + ",\"rows\":[");
-    for (int r = 0; r < band; r++) {
-      if (r > 0) sb.Append(",");
-      sb.Append("\"");
-      for (int c = 0; c < cols; c++) {
-        int miss = 0, seen = 0;
-        for (int sy = 1; sy <= 3; sy++)
-          for (int sx = 1; sx <= 3; sx++) {
-            int x = (int)(ox + (c + sx / 4.0) * cellW);
-            int y = (int)(oy + (r + sy / 4.0) * cellH);
-            seen++;
-            if (x < 0 || y < 0 || x >= W || y >= H || !m(x, y)) miss++;
-          }
-        sb.Append(miss * 3 >= seen ? '1' : '0');
-      }
-      sb.Append("\"");
-    }
-    sb.Append("]}");
-    return sb.ToString();
-  }
 }
 "@
 [PulseWin]::Init()
-
-function Signature {
-  try {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $parts = @()
-    foreach ($cls in @('Shell_TrayWnd', 'Shell_SecondaryTrayWnd')) {
-      $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ClassNameProperty, $cls)
-      foreach ($tb in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)) {
-        foreach ($e in $tb.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
-          $r = $e.Current.BoundingRectangle
-          if ($r.Width -gt 0 -and $e.Current.ClassName -notlike '*AnimatedVisual*') { $parts += ('{0}:{1}:{2}' -f $e.Current.ClassName, [int]$r.X, [int]$r.Width) }
-        }
-      }
-    }
-    return ($parts -join '|')
-  } catch { return 'error' }
-}
 
 while ($true) {
   $line = [Console]::In.ReadLine()
@@ -236,10 +128,8 @@ while ($true) {
   try {
     switch ($a[0]) {
       'place' { $mode = 'cur'; if ($a.Length -gt 1) { $mode = $a[1] }; $out = [PulseWin]::Place('Live Pulse', $mode) }
-      'cal' { $out = [PulseWin]::Calibrate('Live Pulse', [int]$a[1], [int]$a[2], [int]$a[3]) }
       'rect' { $out = [PulseWin]::Rect('Live Pulse') }
       'min' { $out = [PulseWin]::Min('Live Pulse') }
-      'sig' { $s = Signature; $out = '{"sig":' + (ConvertTo-Json $s -Compress) + '}' }
       default { $out = '{"ok":false,"why":"unknown command"}' }
     }
   } catch {

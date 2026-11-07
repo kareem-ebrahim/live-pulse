@@ -26,7 +26,6 @@ tool calls by kind — all from real hook events.
 | **Activity** | The selected session's events (or every session's): real diffs with context, commands and the first lines of their output, filtered by kind, agent or file. |
 | **Background shells & agents** | A shell, monitor or agent running in the background appears as its own creature while it runs, with its command, its latest output line, lines/KB written and how long it has been quiet. Click it to read its output live as it streams; when it ends it shows its exit code, then goes away. |
 | **Two sessions, one file** | When two sessions edit the same file, a red arc joins their creatures. A message from one session to another crosses the screen as a beam. |
-| **Notch-aware** | On a floating top taskbar, the window measures the islands over its top rows and flows its content around them, like a phone's notch. |
 
 A session you close leaves the screen. Everything is controlled with the mouse as well as the keyboard, and the window restarts itself
 whenever its code is updated.
@@ -134,7 +133,7 @@ In the window — mouse or keys:
 | wheel · `↑` `↓` `PgUp` `PgDn` | scroll events and code · `F` follows the newest |
 | `L` | full-height activity |
 | `─` `□` `✕` (top right) | minimise · window / full screen · close |
-| `M` · `W` · `N` | next monitor · window / full screen · measure the notch again |
+| `M` · `W` | next monitor · window / full screen |
 | `Q` | quit |
 
 ## Render the video
