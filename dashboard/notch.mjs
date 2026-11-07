@@ -74,6 +74,11 @@ export function startNotch() {
   return true
 }
 
+/** Minimises the window to the taskbar. */
+export function minimize() {
+  void send('min', 3000)
+}
+
 export function stopNotch() {
   try {
     ps?.stdin.end()

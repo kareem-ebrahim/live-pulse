@@ -16,7 +16,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ALIVE, SESS, focused, poll, store } from './data.mjs'
 import { MOUSE_OFF, MOUSE_ON, parseInput } from './input.mjs'
-import { calibrate, fakeIslands, notch, place, startNotch, stopNotch, watch } from './notch.mjs'
+import { calibrate, fakeIslands, minimize, notch, place, startNotch, stopNotch, watch } from './notch.mjs'
 import { actions, cycleSession, frame, toggleFull, ui } from './scene.mjs'
 import { Screen } from './screen.mjs'
 import { logKey, logUi } from './views/log.mjs'
@@ -74,6 +74,7 @@ process.on('SIGTERM', quit)
 
 const size = () => ({ w: S.w, h: S.h })
 actions.quit = quit
+actions.minimize = minimize
 actions.window = () => void place(notch.cover ? 'win' : 'cur', size)
 actions.monitor = () => void place('next', size)
 actions.notch = () => void place(notch.cover ? 'cur' : 'win', size)
@@ -133,7 +134,7 @@ out.on('resize', () => {
   resizeTimer = setTimeout(() => void calibrate(size), 600)
 })
 
-// Fill the monitor under the taskbar, then find its islands; keep watching.
+// Fill the monitor's work area (never under a docked taskbar), then find its islands; keep watching.
 if (startNotch()) {
   void (async () => {
     await place('cur', size)

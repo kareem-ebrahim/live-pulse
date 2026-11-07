@@ -14,6 +14,7 @@ export const ui = { fullLog: false }
 export const actions = {
   notch: () => {},
   quit: () => {},
+  minimize: () => {},
   window: () => {},
   monitor: () => {},
 }
@@ -22,14 +23,21 @@ export const actions = {
 // The top rows
 // ════════════════════════════════════════════════════════════════════════════
 
-/** The three dots: quit, window / full screen, next monitor. */
-function dots(S, x, y, bg) {
-  S.set(x, y, '●', P.red, bg)
-  S.set(x + 2, y, '●', P.yellow, bg)
-  S.set(x + 4, y, '●', P.greenDot, bg)
-  S.hit(x, y, 1, 1, { onClick: () => actions.quit() })
-  S.hit(x + 2, y, 1, 1, { onClick: () => actions.window() })
-  S.hit(x + 4, y, 1, 1, { onClick: () => actions.monitor() })
+/** Window buttons, as on any window: minimise, maximise / restore, close. Ends at column x. */
+export const CONTROLS_W = 12
+function controls(S, x, y, bg) {
+  const items = [
+    [' ─ ', P.mid, () => actions.minimize()],
+    [' □ ', P.mid, () => actions.window()],
+    [' ✕ ', P.text, () => actions.quit(), P.red],
+  ]
+  let cx = x - CONTROLS_W + 1
+  for (const [label, fg, fn, hot] of items) {
+    S.text(cx, y, label, hot ? P.bg : fg, { bold: true, bg: hot || P.faint })
+    S.hit(cx, y, 3, 1, { onClick: fn })
+    cx += 4
+  }
+  void bg
 }
 
 function totals(now) {
@@ -86,15 +94,15 @@ function drawTopFlow(S, isl, t, now) {
   const r0 = freeSegments(isl, W, 0)
   const first = r0.find(s => s.w >= 18)
   if (first) {
-    dots(S, first.a + 1, 0, P.bg)
-    S.text(first.a + 8, 0, 'Live Pulse', P.mid, { bold: true })
-    first.used = 19
+    S.text(first.a + 1, 0, 'Live Pulse', P.mid, { bold: true })
+    first.used = 12
   }
   const tag = [['● ', live.length ? P.router : P.dim], [`${live.length} LIVE`, live.length ? P.router : P.dim, true], ['  ' + clock(now), P.dim]]
-  const last = [...r0].reverse().find(s => s.w - s.used >= partsLen(tag) + 2)
+  const last = [...r0].reverse().find(s => s.w - s.used >= partsLen(tag) + CONTROLS_W + 3)
   if (last) {
-    S.segs(last.b - partsLen(tag), 0, tag)
-    last.right = partsLen(tag) + 2
+    controls(S, last.b, 0, P.bg)
+    S.segs(last.b - CONTROLS_W - 1 - partsLen(tag), 0, tag)
+    last.right = partsLen(tag) + CONTROLS_W + 3
   }
   const head = headerParts(now)
   const widest = [...r0].sort((a, b) => b.w - b.used - b.right - (a.w - a.used - a.right))[0]
@@ -185,7 +193,7 @@ function draw(S, t, now) {
   if (W < 100 || H < 33) {
     const msg = `widen this window to at least 100×33 (now ${W}×${H})`
     S.text(centerX(0, W, msg), Math.floor(H / 2), msg, P.coral, { bold: true })
-    dots(S, 2, 0, P.bg)
+    controls(S, W - 2, 0, P.bg)
     return
   }
   const st = focused(now)
@@ -196,11 +204,11 @@ function draw(S, t, now) {
     // a plain title bar and header
     const { live } = totals(now)
     S.rect(0, 0, W, 1, P.bar)
-    dots(S, 1, 0, P.bar)
+    controls(S, W - 1, 0, P.bar)
     const ttl = 'Live Pulse · every Claude Code session on this machine'
     S.text(centerX(0, W, ttl), 0, ttl, P.mid, { bg: P.bar })
     const tag = `${live.length} LIVE`
-    S.segs(W - len(tag) - 4, 0, [['● ', live.length ? P.router : P.dim], [tag, live.length ? P.router : P.dim, true]], { bg: P.bar })
+    S.segs(W - len(tag) - 4 - CONTROLS_W - 1, 0, [['● ', live.length ? P.router : P.dim], [tag, live.length ? P.router : P.dim, true]], { bg: P.bar })
     const head = headerParts(now).flatMap((p, i) => (i ? [...SEP, ...p] : p))
     S.segs(centerX(0, W, head.map(h => h[0]).join('')), 1, head)
     cy = 3

@@ -6,7 +6,8 @@
 #   cal <cols> <rows> <band> -> screenshot of the window's monitor; finds the 3 calibration
 #                               markers and, in the top <band> rows, every cell that is not
 #                               the calibration colour
-#   rect                     -> the window's rect, its monitor's rect, in front, minimised
+#   rect                     -> the window's rect, its monitor's work area, in front, minimised
+#   min                      -> minimise the window
 #   sig                      -> a signature of the taskbar's layout
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -68,7 +69,7 @@ public static class PulseWin {
       MONITORINFO mi = new MONITORINFO();
       mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
       GetMonitorInfo(m, ref mi);
-      l.Add(mi.rcMonitor);
+      l.Add(mi.rcWork);
       return true;
     }, IntPtr.Zero);
     l.Sort(delegate (RECT a, RECT b) { return a.L != b.L ? a.L.CompareTo(b.L) : a.T.CompareTo(b.T); });
@@ -79,7 +80,7 @@ public static class PulseWin {
     MONITORINFO mi = new MONITORINFO();
     mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
     GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
-    return mi.rcMonitor;
+    return mi.rcWork;
   }
 
   static string R(RECT r) { return "\"x\":" + r.L + ",\"y\":" + r.T + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T); }
@@ -103,6 +104,13 @@ public static class PulseWin {
     SetWindowPos(h, IntPtr.Zero, x, y, w, hh, 0x0004 | 0x0040);
     SetForegroundWindow(h);
     return "{\"ok\":true,\"monitor\":" + idx + ",\"monitors\":" + mons.Count + "," + R(m) + "}";
+  }
+
+  public static string Min(string title) {
+    IntPtr h = Find(title);
+    if (h == IntPtr.Zero) return "{\"ok\":false}";
+    ShowWindow(h, 6);
+    return "{\"ok\":true}";
   }
 
   public static string Rect(string title) {
@@ -222,6 +230,7 @@ while ($true) {
       'place' { $mode = 'cur'; if ($a.Length -gt 1) { $mode = $a[1] }; $out = [PulseWin]::Place('Live Pulse', $mode) }
       'cal' { $out = [PulseWin]::Calibrate('Live Pulse', [int]$a[1], [int]$a[2], [int]$a[3]) }
       'rect' { $out = [PulseWin]::Rect('Live Pulse') }
+      'min' { $out = [PulseWin]::Min('Live Pulse') }
       'sig' { $s = Signature; $out = '{"sig":' + (ConvertTo-Json $s -Compress) + '}' }
       default { $out = '{"ok":false,"why":"unknown command"}' }
     }

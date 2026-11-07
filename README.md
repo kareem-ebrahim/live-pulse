@@ -130,6 +130,7 @@ In the window — mouse or keys:
 | click a filter · `←` `→` · `1`–`6` | activity by kind · click an agent or file to filter to it |
 | wheel · `↑` `↓` `PgUp` `PgDn` | scroll events and code · `F` follows the newest |
 | `L` | full-height activity |
+| `─` `□` `✕` (top right) | minimise · window / full screen · close |
 | `M` · `W` · `N` | next monitor · window / full screen · measure the notch again |
 | `Q` | quit |
 
