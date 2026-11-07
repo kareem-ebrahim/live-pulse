@@ -83,6 +83,14 @@ public static class PulseWin {
     return mi.rcWork;
   }
 
+  /** Whether a taskbar can draw over the window: it reserves no space on this monitor (floating, auto-hide). */
+  static bool Overlaid(IntPtr h) {
+    MONITORINFO mi = new MONITORINFO();
+    mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+    GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
+    return mi.rcWork.T == mi.rcMonitor.T && mi.rcWork.B == mi.rcMonitor.B && mi.rcWork.L == mi.rcMonitor.L && mi.rcWork.R == mi.rcMonitor.R;
+  }
+
   static string R(RECT r) { return "\"x\":" + r.L + ",\"y\":" + r.T + ",\"w\":" + (r.R - r.L) + ",\"h\":" + (r.B - r.T); }
 
   public static string Place(string title, string mode) {
@@ -123,7 +131,7 @@ public static class PulseWin {
     int idx = 0;
     for (int i = 0; i < mons.Count; i++) if (mons[i].L == m.L && mons[i].T == m.T) idx = i;
     return "{\"ok\":true," + R(r) + ",\"mx\":" + m.L + ",\"my\":" + m.T + ",\"mw\":" + (m.R - m.L) + ",\"mh\":" + (m.B - m.T) +
-      ",\"monitor\":" + idx + ",\"monitors\":" + mons.Count +
+      ",\"monitor\":" + idx + ",\"monitors\":" + mons.Count + ",\"overlaid\":" + (Overlaid(h) ? "true" : "false") +
       ",\"front\":" + (GetForegroundWindow() == h ? "true" : "false") + ",\"min\":" + (IsIconic(h) ? "true" : "false") + "}";
   }
 

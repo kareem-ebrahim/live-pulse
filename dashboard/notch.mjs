@@ -27,6 +27,7 @@ export const notch = {
 }
 
 let ps
+let placedAt = 0
 const waiting = []
 
 function send(cmd, timeoutMs = 8000) {
@@ -101,6 +102,7 @@ export async function place(mode, getSize) {
   if (mode === 'win') notch.cover = false
   else notch.cover = true
   const res = await send(`place ${mode}`)
+  placedAt = Date.now()
   if (res?.ok) {
     notch.monitor = res.monitor
     notch.monitors = res.monitors
@@ -124,6 +126,11 @@ export async function calibrate(getSize) {
   notch.rect = rectKey(r)
   notch.monitor = r.monitor
   notch.monitors = r.monitors
+  if (!r.overlaid || !notch.cover) {
+    notch.rows = []
+    notch.status = 'none'
+    return
+  }
   notch.calibrating = true
   notch.status = 'calibrating'
   await sleep(180)
@@ -161,9 +168,10 @@ export async function watch(getSize) {
   const r = await send('rect', 3000)
   if (!r?.ok) return
   notch.monitors = r.monitors
-  if (notch.cover && !r.min && !covers(r)) {
-    await place('cur', getSize)
-    return
+  if (notch.cover && !r.min && !covers(r) && Date.now() - placedAt > 3000) {
+    notch.cover = false
+    notch.rows = []
+    notch.status = 'none'
   }
   const changed = (s?.sig && notch.sig && s.sig !== notch.sig) || (notch.rect && rectKey(r) !== notch.rect)
   if (s?.sig) notch.sig = s.sig
