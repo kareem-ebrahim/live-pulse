@@ -1,0 +1,5 @@
+{
+  "name": "live-pulse",
+  "owner": { "name": "Kareem Ebrahim" },
+  "plugins": [{ "name": "live-pulse", "source": "./" }]
+}

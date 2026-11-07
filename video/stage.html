@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: 'JB'; src: url('node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2') format('woff2'); font-weight: 500; }
+  @font-face { font-family: 'JB'; src: url('node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-800-normal.woff2') format('woff2'); font-weight: 800; }
+  @font-face { font-family: 'Inter'; src: url('node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2'); font-weight: 400; }
+  @font-face { font-family: 'Inter'; src: url('node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2'); font-weight: 500; }
+  @font-face { font-family: 'Inter'; src: url('node_modules/@fontsource/inter/files/inter-latin-700-normal.woff2') format('woff2'); font-weight: 700; }
+  @font-face { font-family: 'Inter'; src: url('node_modules/@fontsource/inter/files/inter-latin-800-normal.woff2') format('woff2'); font-weight: 800; }
+  @font-face { font-family: 'Inter'; src: url('node_modules/@fontsource/inter/files/inter-latin-900-normal.woff2') format('woff2'); font-weight: 900; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #030407; }
+  #stage { position: absolute; inset: 0; overflow: hidden; background: radial-gradient(120% 90% at 50% 40%, #0c1220 0%, #05070c 55%, #020305 100%); }
+  canvas { position: absolute; left: 0; top: 0; }
+  #bg { width: 1920px; height: 1080px; }
+  #wrap { position: absolute; inset: 0; perspective: 2400px; perspective-origin: 50% 45%; }
+  #panel { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-style: flat; border-radius: 22px; overflow: hidden;
+           box-shadow: 0 60px 160px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.06), 0 0 120px rgba(208,109,88,0.10); will-change: transform; }
+  #panel canvas { width: 1920px; height: 1080px; }
+  #glow { mix-blend-mode: screen; opacity: 0.38; }
+  #fx { width: 1920px; height: 1080px; }
+  #type { position: absolute; inset: 0; font-family: 'Inter'; color: #f4efe8; }
+  .line { position: absolute; white-space: nowrap; }
+  .w { display: inline-block; overflow: hidden; vertical-align: top; padding: 0.08em 0.02em 0.14em; margin: -0.08em -0.02em -0.14em; }
+  .wi { display: inline-block; will-change: transform; }
+  #grain { width: 1920px; height: 1080px; opacity: 0.07; mix-blend-mode: overlay; image-rendering: pixelated; }
+  #sweep { position: absolute; inset: -20%; pointer-events: none; mix-blend-mode: screen; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+  #scrim { position: absolute; inset: 0; background: linear-gradient(to top, rgba(3,4,7,0.94) 0%, rgba(3,4,7,0.78) 20%, rgba(3,4,7,0.0) 46%); opacity: 0; }
+  #vig { position: absolute; inset: 0; background: radial-gradient(120% 100% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.65) 100%); }
+  #bars { position: absolute; left: 0; right: 0; height: 0; background: #000; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="mb" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur id="mbg" stdDeviation="0 0" /></filter>
+</svg>
+<div id="stage">
+  <canvas id="bg" width="1920" height="1080"></canvas>
+  <div id="wrap"><div id="panel">
+    <canvas id="gridBlur" width="1920" height="1080"></canvas>
+    <canvas id="grid" width="3840" height="2160"></canvas>
+    <canvas id="glow" width="960" height="540"></canvas>
+  </div></div>
+  <canvas id="fx" width="1920" height="1080"></canvas>
+  <div id="sweep"></div>
+  <div id="scrim"></div>
+  <div id="type"></div>
+  <canvas id="grain" width="480" height="270"></canvas>
+  <div id="vig"></div>
+  <div id="flash"></div>
+</div>
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// Picture: the dashboard grid as vector graphics at the camera's own zoom,
+// on a 3D panel, with depth of field, motion blur, bloom, type and grain.
+// ════════════════════════════════════════════════════════════════════════════
+const $ = id => document.getElementById(id)
+const G = $('grid'), gx = G.getContext('2d')
+const GB = $('gridBlur'), gbx = GB.getContext('2d')
+const GL = $('glow'), glx = GL.getContext('2d')
+const BG = $('bg'), bgx = BG.getContext('2d')
+const FX = $('fx'), fxx = FX.getContext('2d')
+const GR = $('grain'), grx = GR.getContext('2d')
+const SS = 2 // the grid is painted at twice the display size
+const MONO = "'JB', monospace"
+const hex = n => '#' + (n >>> 0).toString(16).padStart(6, '0').slice(-6)
+const rgba = (n, a) => `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
+const ease = t => (t <= 0 ? 0 : t >= 1 ? 1 : t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+const easeOut = t => (t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 4))
+const back = t => { const c = 1.9; t = clamp(t, 0, 1); return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2) }
+
+const U = 1, D = 2, L = 4, R = 8
+const BOX = {
+  '─': [L | R], '│': [U | D], '┌': [D | R], '┐': [D | L], '└': [U | R], '┘': [U | L],
+  '├': [U | D | R], '┤': [U | D | L], '┬': [D | L | R], '┴': [U | L | R], '┼': [U | D | L | R],
+  '╭': [D | R, 'round'], '╮': [D | L, 'round'], '╰': [U | R, 'round'], '╯': [U | L, 'round'],
+  '━': [L | R, 'heavy'], '┃': [U | D, 'heavy'], '┏': [D | R, 'heavy'], '┓': [D | L, 'heavy'], '┗': [U | R, 'heavy'], '┛': [U | L, 'heavy'],
+  '╌': [L | R, 'dash'], '╎': [U | D, 'dash'],
+}
+function drawBox(c, x, y, cw, ch, glyph, color, k) {
+  const [m, style] = BOX[glyph]
+  const cx = x + cw / 2, cy = y + ch / 2
+  c.strokeStyle = color
+  c.lineWidth = (style === 'heavy' ? 2.6 : 1.5) * k
+  if (style === 'dash') c.setLineDash(m & (L | R) ? [cw * 0.38, cw * 0.12] : [ch * 0.3, ch * 0.2])
+  c.beginPath()
+  if (style === 'round') {
+    const r = Math.min(cw, ch) / 2
+    c.moveTo(m & R ? x + cw : x, cy)
+    c.lineTo(m & R ? cx + r : cx - r, cy)
+    c.arcTo(cx, cy, cx, m & D ? cy + r : cy - r, r)
+    c.lineTo(cx, m & D ? y + ch : y)
+  } else {
+    if (m & L) { c.moveTo(cx, cy); c.lineTo(x, cy) }
+    if (m & R) { c.moveTo(cx, cy); c.lineTo(x + cw, cy) }
+    if (m & U) { c.moveTo(cx, cy); c.lineTo(cx, y) }
+    if (m & D) { c.moveTo(cx, cy); c.lineTo(cx, y + ch) }
+  }
+  c.stroke()
+  c.setLineDash([])
+}
+function dot(c, x, y, r, color) { c.fillStyle = color; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill() }
+
+/** The grid under a 2D camera {x, y, z} in cells; only what is in view is drawn. */
+function paintGrid(f) {
+  const W = G.width, H = G.height
+  const cw = (W / f.w) * f.cam.z, ch = (H / f.h) * f.cam.z
+  const ox = W / 2 - f.cam.x * cw, oy = H / 2 - f.cam.y * ch
+  gx.fillStyle = hex(f.bg[0])
+  gx.fillRect(0, 0, W, H)
+  const x0 = Math.max(0, Math.floor(-ox / cw)), x1 = Math.min(f.w, Math.ceil((W - ox) / cw))
+  const y0 = Math.max(0, Math.floor(-oy / ch)), y1 = Math.min(f.h, Math.ceil((H - oy) / ch))
+  const X = x => Math.round(ox + x * cw), Y = y => Math.round(oy + y * ch)
+  for (let y = y0; y < y1; y++) {
+    let x = x0
+    while (x < x1) {
+      const bg = f.bg[y * f.w + x]
+      let e = x + 1
+      while (e < x1 && f.bg[y * f.w + e] === bg) e++
+      gx.fillStyle = hex(bg)
+      gx.fillRect(X(x), Y(y), X(e) - X(x), Y(y + 1) - Y(y))
+      x = e
+    }
+  }
+  const size = Math.min(ch * 0.8, cw / 0.6)
+  const k = cw / 22
+  gx.textBaseline = 'middle'
+  let font = ''
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = y * f.w + x
+      const c = f.ch[i]
+      if (c === ' ') continue
+      const fg = hex(f.fg[i])
+      const px = X(x), py = Y(y), pw = X(x + 1) - px, ph = Y(y + 1) - py
+      if (BOX[c]) { drawBox(gx, px, py, pw, ph, c, fg, k); continue }
+      switch (c) {
+        case '█': gx.fillStyle = fg; gx.fillRect(px, py, pw, ph); continue
+        case '▀': gx.fillStyle = fg; gx.fillRect(px, py, pw, Math.round(ph / 2)); continue
+        case '░': gx.fillStyle = rgba(f.fg[i], 0.2); gx.fillRect(px + k, py + ph * 0.32, pw - 2 * k, ph * 0.36); continue
+        case '▒': gx.fillStyle = rgba(f.fg[i], 0.5); gx.fillRect(px, py + ph * 0.2, pw, ph * 0.6); continue
+        case '▰': gx.fillStyle = fg; gx.fillRect(px + k, py + ph * 0.3, pw - 2 * k, ph * 0.4); continue
+        case '▱': gx.strokeStyle = fg; gx.lineWidth = k; gx.strokeRect(px + k, py + ph * 0.3, pw - 2 * k, ph * 0.4); continue
+        case '●': dot(gx, px + pw / 2, py + ph / 2, Math.min(pw, ph) * 0.36, fg); continue
+        case '•': dot(gx, px + pw / 2, py + ph / 2, Math.min(pw, ph) * 0.22, fg); continue
+        case '·': dot(gx, px + pw / 2, py + ph / 2, Math.min(pw, ph) * 0.12, fg); continue
+        case '■': gx.fillStyle = fg; gx.fillRect(px + pw * 0.15, py + ph * 0.32, pw * 0.7, ph * 0.36); continue
+        case '□': gx.strokeStyle = fg; gx.lineWidth = k; gx.strokeRect(px + pw * 0.15, py + ph * 0.32, pw * 0.7, ph * 0.36); continue
+        case '▼': gx.fillStyle = fg; gx.beginPath(); gx.moveTo(px + pw * 0.15, py + ph * 0.35); gx.lineTo(px + pw * 0.85, py + ph * 0.35); gx.lineTo(px + pw / 2, py + ph * 0.7); gx.fill(); continue
+        case '▶': case '▸': gx.fillStyle = fg; gx.beginPath(); gx.moveTo(px + pw * 0.25, py + ph * 0.3); gx.lineTo(px + pw * 0.85, py + ph / 2); gx.lineTo(px + pw * 0.25, py + ph * 0.7); gx.fill(); continue
+        case '◂': gx.fillStyle = fg; gx.beginPath(); gx.moveTo(px + pw * 0.75, py + ph * 0.3); gx.lineTo(px + pw * 0.15, py + ph / 2); gx.lineTo(px + pw * 0.75, py + ph * 0.7); gx.fill(); continue
+      }
+      const kk = '▁▂▃▄▅▆▇'.indexOf(c)
+      if (kk >= 0) { const hh = ph * (kk + 1) / 8; gx.fillStyle = fg; gx.fillRect(px + k, py + ph - hh, pw - 2 * k, hh); continue }
+      const want = `${f.b[i] === '1' ? 800 : 500} ${size}px ${MONO}`
+      if (want !== font) { gx.font = want; font = want }
+      gx.fillStyle = fg
+      gx.fillText(c, px + (pw - size * 0.6) / 2, py + ph / 2 + k)
+    }
+  }
+}
+
+// background: a slow starfield with parallax
+const STARS = Array.from({ length: 260 }, (_, i) => ({ x: Math.random() * 1920, y: Math.random() * 1080, z: 0.2 + Math.random() * 0.8, s: Math.random() }))
+function paintBg(t, drift) {
+  bgx.clearRect(0, 0, 1920, 1080)
+  for (const s of STARS) {
+    const x = (s.x + t * 12 * s.z + drift.x * s.z * 60 + 1920 * 10) % 1920
+    const y = (s.y + drift.y * s.z * 40 + 1080 * 10) % 1080
+    const a = 0.12 + 0.35 * s.z * (0.6 + 0.4 * Math.sin(t * 1.5 + s.s * 10))
+    bgx.fillStyle = `rgba(190,200,255,${a})`
+    bgx.fillRect(x, y, 1.2 + s.z * 1.6, 1.2 + s.z * 1.6)
+  }
+  // soft coloured nebulae
+  for (const [cx, cy, r, col] of [[400, 300, 700, '208,109,88'], [1500, 800, 800, '109,192,255'], [1100, 150, 600, '187,179,241']]) {
+    const g = bgx.createRadialGradient(cx + drift.x * 30, cy + drift.y * 30, 0, cx, cy, r)
+    g.addColorStop(0, `rgba(${col},0.07)`)
+    g.addColorStop(1, `rgba(${col},0)`)
+    bgx.fillStyle = g
+    bgx.fillRect(0, 0, 1920, 1080)
+  }
+}
+
+function paintGrain() {
+  const img = grx.createImageData(480, 270)
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() * 255
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v
+    img.data[i + 3] = 255
+  }
+  grx.putImageData(img, 0, 0)
+}
+
+// ── the creature, for the intro, the montage cuts and the outro ─────────────
+const SPRITE = ['  ############  ', '  ############  ', '  ##EE####EE##  ', '  ##EE####EE##  ', '################', '################', '  ############  ', '  ############  ', '   # #    # #   ', '   # #    # #   ', '   # #    # #   ']
+const PIX = []
+SPRITE.forEach((row, r) => [...row].forEach((ch, c) => { if (ch !== ' ') PIX.push({ r, c, eye: ch === 'E', seed: Math.random(), ang: Math.random() * Math.PI * 2, dist: 500 + Math.random() * 900 }) }))
+function creatureAssemble(c, cx, cy, px, color, p, t, o = {}) {
+  // each pixel flies in from far away and springs into place, staggered
+  for (const q of PIX) {
+    const local = clamp((p - q.seed * 0.55) / 0.45, 0, 1)
+    if (local <= 0) continue
+    const k = back(local)
+    const tx = cx + (q.c - 8) * px, ty = cy + (q.r - 5.5) * px
+    const sx = cx + Math.cos(q.ang) * q.dist, sy = cy + Math.sin(q.ang) * q.dist
+    const x = sx + (tx - sx) * k, y = sy + (ty - sy) * k
+    const blink = o.blink && q.eye
+    c.save()
+    c.globalAlpha = Math.min(1, local * 2)
+    c.shadowColor = q.eye && !blink ? 'rgba(0,0,0,0)' : color
+    c.shadowBlur = (1 - local) * 40 + 18 * (o.glow ?? 0.6)
+    c.fillStyle = q.eye && !blink ? '#07080b' : color
+    c.translate(x + px / 2, y + px / 2)
+    c.rotate((1 - k) * q.ang * 2)
+    c.fillRect(-px / 2 - 0.5, -px / 2 - 0.5, px + 1, px + 1)
+    c.restore()
+  }
+}
+
+// ── type: words revealed through masks, word by word ───────────────────────
+function renderType(items) {
+  let html = ''
+  for (const it of items) {
+    const words = it.text.split(' ')
+    const enter = it.p, leave = it.out ?? 0
+    const parts = words.map((w, i) => {
+      const local = easeOut(clamp((enter - i * (it.stagger ?? 0.09)) / 0.55, 0, 1))
+      const gone = ease(clamp((leave - i * 0.05) / 0.5, 0, 1))
+      const ty = (1 - local) * 110 - gone * 110
+      const blur = (1 - local) * (it.blurIn ?? 0) + gone * 6
+      const color = it.colors && it.colors[i] ? it.colors[i] : ''
+      return `<span class="w"><span class="wi" style="transform:translateY(${ty}%);filter:blur(${blur}px);${color ? `color:${color};` : ''}">${w}</span></span>`
+    })
+    const align = it.align === 'center' ? 'translateX(-50%)' : it.align === 'right' ? 'translateX(-100%)' : ''
+    const style = `left:${it.x}px;top:${it.y}px;font-size:${it.size}px;font-weight:${it.weight ?? 800};letter-spacing:${it.track ?? -0.02}em;color:${it.color ?? '#f4efe8'};transform:${align};${it.glow ? `text-shadow:0 0 40px ${it.glow};` : ''}${it.font === 'mono' ? `font-family:${MONO};` : ''}opacity:${it.opacity ?? 1}`
+    html += `<div class="line" style="${style}">${parts.join(' ')}</div>`
+  }
+  $('type').innerHTML = html
+}
+
+window.renderFrame = f => {
+  const t = f.t
+  paintBg(t, f.drift)
+  paintGrain()
+
+  // the panel
+  const panel = $('panel')
+  if (f.grid) {
+    panel.style.display = 'block'
+    paintGrid(f.grid)
+    // bloom: a small blurred copy, screened over
+    glx.clearRect(0, 0, 960, 540)
+    glx.filter = 'blur(7px) brightness(1.6) saturate(1.3)'
+    glx.drawImage(G, 0, 0, 960, 540)
+    glx.filter = 'none'
+    // depth of field: a blurred copy under a masked sharp one
+    const d = f.dof
+    if (d && d.blur > 0.2) {
+      GB.style.display = 'block'
+      gbx.filter = `blur(${d.blur}px)`
+      gbx.drawImage(G, 0, 0, 1920, 1080)
+      gbx.filter = 'none'
+      const m = `radial-gradient(ellipse ${d.rx}px ${d.ry}px at ${d.x}px ${d.y}px, #000 55%, transparent 100%)`
+      G.style.webkitMaskImage = m
+      G.style.maskImage = m
+    } else {
+      GB.style.display = 'none'
+      G.style.webkitMaskImage = 'none'
+      G.style.maskImage = 'none'
+    }
+    const p = f.panel
+    panel.style.transform = `translate3d(${p.tx}px, ${p.ty}px, ${p.tz}px) rotateX(${p.rx}deg) rotateY(${p.ry}deg) rotateZ(${p.rz}deg) scale(${p.s})`
+    panel.style.opacity = p.o
+    panel.style.borderRadius = `${p.radius}px`
+    $('mbg').setAttribute('stdDeviation', `${f.mb.x} ${f.mb.y}`)
+    panel.style.filter = f.mb.x > 0.3 || f.mb.y > 0.3 ? 'url(#mb)' : 'none'
+  } else {
+    panel.style.display = 'none'
+  }
+
+  // effects layer: the creature for intro, cuts and outro
+  fxx.clearRect(0, 0, 1920, 1080)
+  for (const c of f.creatures || []) creatureAssemble(fxx, c.x, c.y, c.px, c.color, c.p, t, c)
+
+  // light sweep
+  const sw = $('sweep')
+  if (f.sweep != null) {
+    const x = -40 + f.sweep * 180
+    sw.style.background = `linear-gradient(105deg, rgba(255,255,255,0) ${x}%, rgba(255,240,230,0.16) ${x + 6}%, rgba(255,255,255,0) ${x + 12}%)`
+  } else sw.style.background = 'none'
+
+  $('scrim').style.opacity = f.scrim || 0
+  renderType(f.type || [])
+  $('flash').style.opacity = f.flash || 0
+  $('stage').style.transform = f.shake ? `translate(${f.shake.x}px, ${f.shake.y}px)` : 'none'
+  return true
+}
+
+window.ready = (async () => {
+  await document.fonts.load("500 20px 'JB'")
+  await document.fonts.load("800 20px 'JB'")
+  for (const w of [400, 500, 700, 800, 900]) await document.fonts.load(`${w} 40px 'Inter'`)
+  return document.fonts.check("500 20px 'JB'") && document.fonts.check("800 40px 'Inter'")
+})()
+
+// ════════════════════════════════════════════════════════════════════════════
+// Sound: an original score and sound design, rendered offline (Web Audio)
+// ════════════════════════════════════════════════════════════════════════════
+window.renderAudio = async (spec) => {
+  const SR = 48000
+  const ctx = new OfflineAudioContext(2, Math.ceil(SR * spec.duration), SR)
+  const BEAT = 60 / spec.bpm
+  const BAR = BEAT * 4
+
+  // buses: music (ducked by the kick), drums, sfx → master
+  const master = ctx.createDynamicsCompressor()
+  master.threshold.value = -14; master.knee.value = 8; master.ratio.value = 3.5; master.attack.value = 0.004; master.release.value = 0.18
+  const out = ctx.createGain(); out.gain.value = 0.9
+  master.connect(out).connect(ctx.destination)
+  const musicDuck = ctx.createGain(); musicDuck.connect(master)
+  const music = ctx.createGain(); music.gain.value = spec.musicGain ?? 1; music.connect(musicDuck)
+  const drums = ctx.createGain(); drums.gain.value = 0.9 * (spec.musicGain ?? 1); drums.connect(master)
+  const sfx = ctx.createGain(); sfx.gain.value = 0.85; sfx.connect(master)
+
+  // reverb from a generated impulse
+  function impulse(sec, decay) {
+    const b = ctx.createBuffer(2, SR * sec, SR)
+    for (let ch = 0; ch < 2; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, decay) }
+    return b
+  }
+  const verb = ctx.createConvolver(); verb.buffer = impulse(3.2, 3.5)
+  const verbOut = ctx.createGain(); verbOut.gain.value = 0.32
+  verb.connect(verbOut).connect(master)
+  const delay = ctx.createDelay(2); delay.delayTime.value = BEAT * 0.75
+  const fb = ctx.createGain(); fb.gain.value = 0.38
+  const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = 3500
+  delay.connect(dlp).connect(fb).connect(delay)
+  const delayOut = ctx.createGain(); delayOut.gain.value = 0.35
+  dlp.connect(delayOut).connect(musicDuck)
+
+  const noiseBuf = (() => { const b = ctx.createBuffer(1, SR * 2, SR); const d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return b })()
+  const noise = (t, dur) => { const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; s.start(t, Math.random()); s.stop(t + dur); return s }
+  const env = (g, t, a, peak, d, sus = 0, r = 0.05, len = 0) => {
+    g.gain.setValueAtTime(0, t)
+    g.gain.linearRampToValueAtTime(peak, t + a)
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, sus || 0.0001), t + a + d)
+    if (len) { g.gain.setValueAtTime(Math.max(0.0001, sus || 0.0001), t + len); g.gain.exponentialRampToValueAtTime(0.0001, t + len + r) }
+  }
+  const panner = v => { const p = ctx.createStereoPanner(); p.pan.value = clamp(v, -1, 1); return p }
+  const note = n => 440 * Math.pow(2, (n - 69) / 12)
+
+  // ── drums ──
+  function kick(t, v = 1) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12)
+    env(g, t, 0.002, 1.0 * v, 0.42)
+    o.connect(g).connect(drums); o.start(t); o.stop(t + 0.5)
+    const c = noise(t, 0.02), hp = ctx.createBiquadFilter(), cg = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 3000; env(cg, t, 0.001, 0.25 * v, 0.015)
+    c.connect(hp).connect(cg).connect(drums)
+    // duck the music
+    musicDuck.gain.setValueAtTime(0.35, t); musicDuck.gain.linearRampToValueAtTime(1, t + BEAT * 0.8)
+  }
+  function clap(t, v = 1) {
+    for (const off of [0, 0.011, 0.022]) {
+      const s = noise(t + off, 0.25), bp = ctx.createBiquadFilter(), g = ctx.createGain()
+      bp.type = 'bandpass'; bp.frequency.value = 1600; bp.Q.value = 0.9
+      env(g, t + off, 0.001, (off ? 0.35 : 0.55) * v, off === 0.022 ? 0.22 : 0.03)
+      s.connect(bp).connect(g).connect(drums); g.connect(verb)
+    }
+  }
+  function hat(t, v = 1, open = false) {
+    const s = noise(t, open ? 0.3 : 0.06), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 8500
+    env(g, t, 0.001, 0.16 * v, open ? 0.22 : 0.04)
+    s.connect(hp).connect(g).connect(panner(0.25)).connect(drums)
+  }
+  function snareRoll(t0, t1) {
+    for (let t = t0, i = 0; t < t1; i++) { const p = (t - t0) / (t1 - t0); clap(t, 0.25 + 0.6 * p); t += BEAT / (p < 0.5 ? 2 : p < 0.8 ? 4 : 8) }
+  }
+
+  // ── tonal ──
+  const PROG = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]] // Am F C G
+  function pad(t, chord, len, v = 1, cutoff = 1400) {
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = cutoff; lp.Q.value = 0.6
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.06 * v, t + 0.7); g.gain.setValueAtTime(0.06 * v, t + len - 0.2); g.gain.linearRampToValueAtTime(0, t + len + 0.8)
+    lp.connect(g); g.connect(music); g.connect(verb)
+    for (const n of [...chord, chord[0] + 12]) for (const det of [-9, 0, 8]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = note(n); o.detune.value = det
+      o.connect(panner(det / 12)).connect(lp); o.start(t); o.stop(t + len + 1)
+    }
+  }
+  function bass(t, n, len, v = 1, open = 1) {
+    const o = ctx.createOscillator(), s = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+    o.type = 'sawtooth'; o.frequency.value = note(n); s.type = 'sine'; s.frequency.value = note(n - 12)
+    lp.type = 'lowpass'; lp.Q.value = 4
+    lp.frequency.setValueAtTime(200 + 900 * open, t); lp.frequency.exponentialRampToValueAtTime(180, t + len * 0.9)
+    env(g, t, 0.004, 0.22 * v, len * 0.85, 0.0001)
+    const sg = ctx.createGain(); env(sg, t, 0.004, 0.35 * v, len * 0.9)
+    o.connect(lp).connect(g).connect(music); s.connect(sg).connect(music)
+    o.start(t); s.start(t); o.stop(t + len + 0.05); s.stop(t + len + 0.05)
+  }
+  function pluck(t, n, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+    o.type = 'triangle'; o.frequency.value = note(n)
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(5000, t); lp.frequency.exponentialRampToValueAtTime(600, t + 0.25)
+    env(g, t, 0.002, 0.09 * v, 0.28)
+    o.connect(lp).connect(g).connect(panner(pan)); g.connect(music); g.connect(delay)
+    o.start(t); o.stop(t + 0.35)
+  }
+  function riser(t, len, v = 1) {
+    const s = noise(t, len), bp = ctx.createBiquadFilter(), g = ctx.createGain()
+    bp.type = 'bandpass'; bp.Q.value = 2; bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(7000, t + len)
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22 * v, t + len)
+    s.connect(bp).connect(g).connect(master); g.connect(verb)
+    const o = ctx.createOscillator(), og = ctx.createGain(); o.type = 'sawtooth'
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(880, t + len)
+    og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.05 * v, t + len)
+    const olp = ctx.createBiquadFilter(); olp.type = 'lowpass'; olp.frequency.value = 2500
+    o.connect(olp).connect(og).connect(master); o.start(t); o.stop(t + len)
+  }
+
+  // ── sound design ──
+  function impact(t, v = 1) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(32, t + 1.2)
+    env(g, t, 0.003, 0.9 * v, 1.6)
+    o.connect(g).connect(sfx); o.start(t); o.stop(t + 1.8)
+    const s = noise(t, 1.2), lp = ctx.createBiquadFilter(), ng = ctx.createGain()
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(6000, t); lp.frequency.exponentialRampToValueAtTime(200, t + 1)
+    env(ng, t, 0.002, 0.4 * v, 1.0)
+    s.connect(lp).connect(ng).connect(sfx); ng.connect(verb)
+  }
+  function whoosh(t, len = 0.6, v = 1, dir = 1) {
+    const s = noise(t, len), bp = ctx.createBiquadFilter(), g = ctx.createGain(), p = ctx.createStereoPanner()
+    bp.type = 'bandpass'; bp.Q.value = 1.4
+    bp.frequency.setValueAtTime(400, t); bp.frequency.exponentialRampToValueAtTime(3200, t + len * 0.55); bp.frequency.exponentialRampToValueAtTime(500, t + len)
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.32 * v, t + len * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + len)
+    p.pan.setValueAtTime(-0.8 * dir, t); p.pan.linearRampToValueAtTime(0.8 * dir, t + len)
+    s.connect(bp).connect(g).connect(p).connect(sfx); g.connect(verb)
+  }
+  const PENTA = [69, 72, 74, 76, 79, 81, 84]
+  function blip(t, i = 0, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.type = 'sine'; o.frequency.value = note(PENTA[i % PENTA.length] + 12)
+    env(g, t, 0.002, 0.07 * v, 0.09)
+    o.connect(g).connect(panner(pan)).connect(sfx); g.connect(delay)
+    o.start(t); o.stop(t + 0.15)
+  }
+  function pop(t, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.type = 'sine'; o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(1320, t + 0.08)
+    env(g, t, 0.002, 0.22 * v, 0.16)
+    o.connect(g).connect(panner(pan)).connect(sfx); g.connect(verb)
+    o.start(t); o.stop(t + 0.2)
+    const o2 = ctx.createOscillator(), g2 = ctx.createGain(); o2.type = 'triangle'; o2.frequency.value = 2640
+    env(g2, t + 0.05, 0.002, 0.05 * v, 0.2); o2.connect(g2).connect(sfx); o2.start(t + 0.05); o2.stop(t + 0.3)
+  }
+  function error(t) {
+    for (const [off, n] of [[0, 52], [0.14, 47]]) {
+      const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+      o.type = 'square'; o.frequency.value = note(n); lp.type = 'lowpass'; lp.frequency.value = 1200
+      env(g, t + off, 0.004, 0.11, 0.2)
+      o.connect(lp).connect(g).connect(sfx); o.start(t + off); o.stop(t + off + 0.25)
+    }
+  }
+  function success(t) {
+    for (const [off, n] of [[0, 76], [0.08, 81], [0.16, 88]]) {
+      const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = note(n)
+      env(g, t + off, 0.003, 0.13, 0.6)
+      o.connect(g).connect(sfx); g.connect(verb); o.start(t + off); o.stop(t + off + 0.7)
+    }
+  }
+  function typing(t0, t1) {
+    for (let t = t0; t < t1; t += 0.055 + Math.random() * 0.07) {
+      const s = noise(t, 0.02), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+      hp.type = 'highpass'; hp.frequency.value = 2500 + Math.random() * 2500
+      env(g, t, 0.001, 0.07 + Math.random() * 0.05, 0.015)
+      s.connect(hp).connect(g).connect(panner(Math.random() * 0.4 - 0.2)).connect(sfx)
+    }
+  }
+  function zap(t) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter()
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(2400, t); o.frequency.exponentialRampToValueAtTime(160, t + 0.35)
+    lp.type = 'lowpass'; lp.frequency.value = 5000
+    env(g, t, 0.003, 0.12, 0.35)
+    o.connect(lp).connect(g).connect(sfx); g.connect(verb); o.start(t); o.stop(t + 0.4)
+  }
+  function tick(t, v = 1) {
+    const s = noise(t, 0.01), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 6000
+    env(g, t, 0.0005, 0.18 * v, 0.008)
+    s.connect(hp).connect(g).connect(sfx)
+  }
+  function alarm(t) {
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'triangle'
+      o.frequency.setValueAtTime(note(76), t + i * 0.28); o.frequency.setValueAtTime(note(71), t + i * 0.28 + 0.14)
+      env(g, t + i * 0.28, 0.004, 0.08, 0.26)
+      o.connect(g).connect(sfx); g.connect(verb); o.start(t + i * 0.28); o.stop(t + i * 0.28 + 0.3)
+    }
+  }
+
+  // ── the score, from the arrangement spec ──
+  if (!spec.noMusic) {
+    for (let bar = 0; bar * BAR < spec.duration; bar++) {
+      const t = bar * BAR
+      const sec = spec.sections.find(s => t >= s.from && t < s.to) ?? { kind: 'none' }
+      const chord = PROG[bar % 4]
+      const k = sec.kind
+      if (k === 'none') continue
+      if (k !== 'tail') pad(t, chord, BAR, k === 'intro' ? 0.8 : k === 'break' ? 1.1 : 0.9, k === 'intro' ? 700 : k === 'break' ? 900 : 1500)
+      if (k === 'tail') pad(t, PROG[0], BAR * 2, 1.2, 900)
+      for (let b = 0; b < 4; b++) {
+        const tb = t + b * BEAT
+        if (k === 'groove' || k === 'drop' || k === 'build') {
+          if (k !== 'build' || b % 2 === 0) kick(tb)
+          if ((k === 'groove' || k === 'drop') && (b === 1 || b === 3)) clap(tb)
+          for (let s = 0; s < 4; s++) hat(tb + s * BEAT / 4, s === 2 ? 1 : 0.45 + 0.2 * (s % 2), k === 'drop' && s === 2)
+          for (let e = 0; e < 2; e++) bass(tb + e * BEAT / 2, chord[0] - 24 + (e === 1 && b === 3 ? 12 : 0), BEAT / 2 - 0.02, 1, k === 'drop' ? 1.4 : k === 'build' ? 0.3 + (t - sec.from) / (sec.to - sec.from) : 1)
+        }
+        if (k === 'break') bass(tb, chord[0] - 24, BEAT - 0.02, 0.6, 0.15)
+        if (k === 'groove' && t >= (spec.arpFrom ?? 0) || k === 'drop') {
+          for (let s = 0; s < 4; s++) pluck(tb + s * BEAT / 4, chord[(b * 4 + s) % 3] + 12 + (s === 3 ? 12 : 0), 0.8, (s % 2 ? 0.3 : -0.3))
+        }
+      }
+    }
+    for (const r of spec.risers ?? []) riser(r.t, r.len, r.v ?? 1)
+    for (const r of spec.rolls ?? []) snareRoll(r.from, r.to)
+  }
+
+  // ── cues from the picture ──
+  for (const c of spec.cues) {
+    switch (c.kind) {
+      case 'impact': impact(c.t, c.v ?? 1); break
+      case 'whoosh': whoosh(c.t, c.len ?? 0.6, c.v ?? 1, c.dir ?? 1); break
+      case 'blip': blip(c.t, c.i ?? 0, c.v ?? 1, c.pan ?? 0); break
+      case 'pop': pop(c.t, c.v ?? 1, c.pan ?? 0); break
+      case 'error': error(c.t); break
+      case 'success': success(c.t); break
+      case 'typing': typing(c.t, c.t + (c.len ?? 1)); break
+      case 'zap': zap(c.t); break
+      case 'tick': tick(c.t, c.v ?? 1); break
+      case 'alarm': alarm(c.t); break
+      case 'riser': riser(c.t, c.len, c.v ?? 1); break
+    }
+  }
+
+  const buf = await ctx.startRendering()
+  // normalise to -1 dBFS and encode 16-bit WAV
+  const L = buf.getChannelData(0), Rr = buf.getChannelData(1)
+  let peak = 0
+  for (let i = 0; i < L.length; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(Rr[i]))
+  const gain = peak > 0 ? 0.89 / peak : 1
+  const n = L.length
+  const ab = new ArrayBuffer(44 + n * 4)
+  const dv = new DataView(ab)
+  const str = (o, s) => [...s].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)))
+  str(0, 'RIFF'); dv.setUint32(4, 36 + n * 4, true); str(8, 'WAVE'); str(12, 'fmt ')
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 2, true); dv.setUint32(24, SR, true)
+  dv.setUint32(28, SR * 4, true); dv.setUint16(32, 4, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, n * 4, true)
+  for (let i = 0, o = 44; i < n; i++, o += 4) {
+    dv.setInt16(o, clamp(L[i] * gain, -1, 1) * 32767, true)
+    dv.setInt16(o + 2, clamp(Rr[i] * gain, -1, 1) * 32767, true)
+  }
+  // hand back in base64 chunks
+  const bytes = new Uint8Array(ab)
+  let s = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+</script>
+</body>
+</html>

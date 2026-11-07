@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<script>
+// The film's score and sound design, rendered offline with Web Audio: a
+// driving 120 BPM track (distorted kick, rolling 16th bass, supersaw lead,
+// stabs, arps, crashes, fills, risers) with the picture's sound effects on top.
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
+
+window.renderAudio = async spec => {
+  const SR = 48000
+  const ctx = new OfflineAudioContext(2, Math.ceil(SR * spec.duration), SR)
+  const BEAT = 60 / spec.bpm
+  const BAR = BEAT * 4
+  const S16 = BEAT / 4
+
+  // ── buses ──
+  const master = ctx.createDynamicsCompressor()
+  master.threshold.value = -12; master.knee.value = 8; master.ratio.value = 3; master.attack.value = 0.003; master.release.value = 0.12
+  const glue = ctx.createGain(); glue.gain.value = 1.1
+  master.connect(glue).connect(ctx.destination)
+  const pump = ctx.createGain(); pump.connect(master) // the sidechain: everything tonal pumps with the kick
+  const music = ctx.createGain(); music.gain.value = 1; music.connect(pump)
+  const drums = ctx.createGain(); drums.gain.value = 1; drums.connect(master)
+  const sfx = ctx.createGain(); sfx.gain.value = 0.8; sfx.connect(master)
+
+  const impulse = (sec, decay) => {
+    const b = ctx.createBuffer(2, SR * sec, SR)
+    for (let ch = 0; ch < 2; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, decay) }
+    return b
+  }
+  const verb = ctx.createConvolver(); verb.buffer = impulse(2.6, 3.2)
+  const verbOut = ctx.createGain(); verbOut.gain.value = 0.28
+  verb.connect(verbOut).connect(pump)
+  const delay = ctx.createDelay(2); delay.delayTime.value = BEAT * 0.75
+  const fb = ctx.createGain(); fb.gain.value = 0.32
+  const dlp = ctx.createBiquadFilter(); dlp.type = 'lowpass'; dlp.frequency.value = 4000
+  delay.connect(dlp).connect(fb).connect(delay)
+  const delayOut = ctx.createGain(); delayOut.gain.value = 0.3
+  dlp.connect(delayOut).connect(pump)
+
+  const shaper = amount => {
+    const ws = ctx.createWaveShaper(), n = 2048, c = new Float32Array(n)
+    for (let i = 0; i < n; i++) { const x = (i / n) * 2 - 1; c[i] = ((1 + amount) * x) / (1 + amount * Math.abs(x)) }
+    ws.curve = c; ws.oversample = '2x'; return ws
+  }
+  const noiseBuf = (() => { const b = ctx.createBuffer(1, SR * 2, SR); const d = b.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; return b })()
+  const noise = (t, dur) => { const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true; s.start(t, Math.random()); s.stop(t + dur); return s }
+  const env = (g, t, a, peak, d) => {
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(peak, t + a)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + a + d)
+  }
+  const panner = v => { const p = ctx.createStereoPanner(); p.pan.value = clamp(v, -1, 1); return p }
+  const note = n => 440 * Math.pow(2, (n - 69) / 12)
+
+  // ── drums ──
+  const kickDrive = shaper(6); const kickBus = ctx.createGain(); kickBus.gain.value = 0.95
+  kickDrive.connect(kickBus).connect(drums)
+  function kick(t, v = 1) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.frequency.setValueAtTime(180, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.09); o.frequency.exponentialRampToValueAtTime(38, t + 0.4)
+    env(g, t, 0.001, 0.9 * v, 0.38)
+    o.connect(g).connect(kickDrive); o.start(t); o.stop(t + 0.45)
+    const c = noise(t, 0.03), hp = ctx.createBiquadFilter(), cg = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 2500; env(cg, t, 0.0005, 0.35 * v, 0.02)
+    c.connect(hp).connect(cg).connect(drums)
+    pump.gain.setValueAtTime(0.18, t); pump.gain.linearRampToValueAtTime(1, t + BEAT * 0.62)
+  }
+  function snare(t, v = 1) {
+    const o = ctx.createOscillator(), og = ctx.createGain(); o.type = 'triangle'
+    o.frequency.setValueAtTime(240, t); o.frequency.exponentialRampToValueAtTime(160, t + 0.08)
+    env(og, t, 0.001, 0.35 * v, 0.12); o.connect(og).connect(drums); o.start(t); o.stop(t + 0.2)
+    const s = noise(t, 0.3), bp = ctx.createBiquadFilter(), g = ctx.createGain()
+    bp.type = 'highpass'; bp.frequency.value = 1400
+    env(g, t, 0.001, 0.5 * v, 0.2)
+    s.connect(bp).connect(g).connect(drums); g.connect(verb)
+  }
+  function clap(t, v = 1) {
+    for (const off of [0, 0.01, 0.021]) {
+      const s = noise(t + off, 0.25), bp = ctx.createBiquadFilter(), g = ctx.createGain()
+      bp.type = 'bandpass'; bp.frequency.value = 1700; bp.Q.value = 0.8
+      env(g, t + off, 0.001, (off === 0.021 ? 0.5 : 0.35) * v, off === 0.021 ? 0.2 : 0.025)
+      s.connect(bp).connect(g).connect(drums); g.connect(verb)
+    }
+  }
+  function hat(t, v = 1, open = false) {
+    const s = noise(t, open ? 0.4 : 0.06), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = open ? 7000 : 9000
+    env(g, t, 0.001, (open ? 0.2 : 0.17) * v, open ? 0.3 : 0.035)
+    s.connect(hp).connect(g).connect(panner(open ? -0.2 : 0.25)).connect(drums)
+  }
+  function crash(t, v = 1) {
+    const s = noise(t, 2.5), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 5000
+    env(g, t, 0.002, 0.32 * v, 2.2)
+    s.connect(hp).connect(g).connect(drums); g.connect(verb)
+  }
+  function fill(t0, t1) {
+    for (let t = t0; t < t1 - 0.001; t += S16) { const p = (t - t0) / (t1 - t0); snare(t, 0.35 + 0.6 * p) }
+  }
+
+  // ── tonal ── (Am – F – C – G, the epic minor loop)
+  const PROG = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]]
+  const ROOT = [45, 41, 48, 43]
+  const bassDrive = shaper(3); const bassBus = ctx.createGain(); bassBus.gain.value = 0.55
+  bassDrive.connect(bassBus).connect(music)
+  function bass16(t, root, cutoff = 1, v = 1) {
+    // a rolling bass: every 16th but the downbeat, which the kick owns
+    for (let s = 1; s < 4; s++) {
+      const ts = t + s * S16
+      const o = ctx.createOscillator(), o2 = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+      o.type = 'sawtooth'; o2.type = 'square'
+      o.frequency.value = note(root - 12); o2.frequency.value = note(root - 12); o2.detune.value = 7
+      lp.type = 'lowpass'; lp.Q.value = 6
+      lp.frequency.setValueAtTime(220 + 2200 * cutoff, ts); lp.frequency.exponentialRampToValueAtTime(160, ts + S16 * 0.9)
+      env(g, ts, 0.002, 0.42 * v, S16 * 0.85)
+      o.connect(lp); o2.connect(lp); lp.connect(g).connect(bassDrive)
+      o.start(ts); o2.start(ts); o.stop(ts + S16); o2.stop(ts + S16)
+    }
+    const sub = ctx.createOscillator(), sg = ctx.createGain(); sub.type = 'sine'; sub.frequency.value = note(root - 24)
+    sg.gain.setValueAtTime(0.0001, t); sg.gain.linearRampToValueAtTime(0.32 * v, t + S16); sg.gain.setValueAtTime(0.32 * v, t + BEAT - 0.02); sg.gain.linearRampToValueAtTime(0.0001, t + BEAT)
+    sub.connect(sg).connect(music); sub.start(t); sub.stop(t + BEAT)
+  }
+  function supersaw(t, n, len, v = 1, cutoff = 4200, dest = music) {
+    const lp = ctx.createBiquadFilter(), g = ctx.createGain()
+    lp.type = 'lowpass'; lp.frequency.value = cutoff; lp.Q.value = 1
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.05 * v, t + 0.01); g.gain.setValueAtTime(0.05 * v, t + len * 0.8); g.gain.exponentialRampToValueAtTime(0.0001, t + len + 0.12)
+    lp.connect(g); g.connect(dest); g.connect(verb); g.connect(delay)
+    for (const det of [-22, -13, -6, 0, 6, 13, 22]) {
+      const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = note(n); o.detune.value = det
+      o.connect(panner(det / 24)).connect(lp); o.start(t); o.stop(t + len + 0.15)
+    }
+  }
+  function stab(t, chord, v = 1, cutoff = 3000) {
+    for (const n of [...chord, chord[0] + 12]) supersaw(t, n, BEAT * 0.22, 0.55 * v, cutoff)
+  }
+  function pluck(t, n, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+    o.type = 'square'; o.frequency.value = note(n)
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(6000, t); lp.frequency.exponentialRampToValueAtTime(700, t + 0.18)
+    env(g, t, 0.001, 0.06 * v, 0.2)
+    o.connect(lp).connect(g).connect(panner(pan)); g.connect(music); g.connect(delay)
+    o.start(t); o.stop(t + 0.25)
+  }
+  // the hook: two bars, over the loop
+  const HOOK = [[0, 76, 0.75], [0.75, 74, 0.25], [1, 72, 0.5], [1.5, 71, 0.5], [2, 72, 1.5], [3.5, 76, 0.5], [4, 79, 0.75], [4.75, 77, 0.25], [5, 76, 0.5], [5.5, 74, 0.5], [6, 76, 2]]
+  function hook(t, v = 1, cutoff = 5200) {
+    for (const [b, n, len] of HOOK) supersaw(t + b * BEAT, n, len * BEAT - 0.03, 1.2 * v, cutoff)
+  }
+  function riser(t, len, v = 1) {
+    const s = noise(t, len), bp = ctx.createBiquadFilter(), g = ctx.createGain()
+    bp.type = 'bandpass'; bp.Q.value = 1.6; bp.frequency.setValueAtTime(300, t); bp.frequency.exponentialRampToValueAtTime(9000, t + len)
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.32 * v, t + len)
+    s.connect(bp).connect(g).connect(master); g.connect(verb)
+    const o = ctx.createOscillator(), og = ctx.createGain(); o.type = 'sawtooth'
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(1760, t + len)
+    og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.07 * v, t + len)
+    const olp = ctx.createBiquadFilter(); olp.type = 'lowpass'; olp.frequency.value = 4000
+    o.connect(olp).connect(og).connect(master); o.start(t); o.stop(t + len)
+  }
+
+  // ── sound design (the picture's cues) ──
+  function impact(t, v = 1) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(30, t + 1.0)
+    env(g, t, 0.002, 1.0 * v, 1.5)
+    o.connect(shaper(2)).connect(g).connect(sfx); o.start(t); o.stop(t + 1.7)
+    const s = noise(t, 1.4), lp = ctx.createBiquadFilter(), ng = ctx.createGain()
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(9000, t); lp.frequency.exponentialRampToValueAtTime(180, t + 1.1)
+    env(ng, t, 0.001, 0.5 * v, 1.1)
+    s.connect(lp).connect(ng).connect(sfx); ng.connect(verb)
+    crash(t, 0.9 * v)
+  }
+  function whoosh(t, len = 0.6, v = 1, dir = 1) {
+    const s = noise(t, len), bp = ctx.createBiquadFilter(), g = ctx.createGain(), p = ctx.createStereoPanner()
+    bp.type = 'bandpass'; bp.Q.value = 1.2
+    bp.frequency.setValueAtTime(350, t); bp.frequency.exponentialRampToValueAtTime(4200, t + len * 0.55); bp.frequency.exponentialRampToValueAtTime(500, t + len)
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.42 * v, t + len * 0.5); g.gain.exponentialRampToValueAtTime(0.0001, t + len)
+    p.pan.setValueAtTime(-0.85 * dir, t); p.pan.linearRampToValueAtTime(0.85 * dir, t + len)
+    s.connect(bp).connect(g).connect(p).connect(sfx); g.connect(verb)
+  }
+  const PENTA = [69, 72, 74, 76, 79, 81, 84]
+  function blip(t, i = 0, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.type = 'sine'; o.frequency.value = note(PENTA[i % PENTA.length] + 12)
+    env(g, t, 0.002, 0.06 * v, 0.08)
+    o.connect(g).connect(panner(pan)).connect(sfx)
+    o.start(t); o.stop(t + 0.12)
+  }
+  function pop(t, v = 1, pan = 0) {
+    const o = ctx.createOscillator(), g = ctx.createGain()
+    o.type = 'sine'; o.frequency.setValueAtTime(380, t); o.frequency.exponentialRampToValueAtTime(1500, t + 0.08)
+    env(g, t, 0.002, 0.3 * v, 0.16)
+    o.connect(g).connect(panner(pan)).connect(sfx); g.connect(verb)
+    o.start(t); o.stop(t + 0.2)
+  }
+  function error(t) {
+    for (const [off, n] of [[0, 52], [0.13, 46]]) {
+      const o = ctx.createOscillator(), lp = ctx.createBiquadFilter(), g = ctx.createGain()
+      o.type = 'square'; o.frequency.value = note(n); lp.type = 'lowpass'; lp.frequency.value = 1400
+      env(g, t + off, 0.003, 0.16, 0.2)
+      o.connect(lp).connect(g).connect(sfx); o.start(t + off); o.stop(t + off + 0.25)
+    }
+  }
+  function success(t) {
+    for (const [off, n] of [[0, 76], [0.07, 81], [0.14, 88]]) {
+      const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = note(n)
+      env(g, t + off, 0.003, 0.16, 0.55)
+      o.connect(g).connect(sfx); g.connect(verb); o.start(t + off); o.stop(t + off + 0.6)
+    }
+  }
+  function typing(t0, t1) {
+    for (let t = t0; t < t1; t += 0.05 + Math.random() * 0.06) {
+      const s = noise(t, 0.02), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+      hp.type = 'highpass'; hp.frequency.value = 2500 + Math.random() * 2500
+      env(g, t, 0.001, 0.09 + Math.random() * 0.05, 0.014)
+      s.connect(hp).connect(g).connect(panner(Math.random() * 0.4 - 0.2)).connect(sfx)
+    }
+  }
+  function zap(t) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), lp = ctx.createBiquadFilter()
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(2600, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.35)
+    lp.type = 'lowpass'; lp.frequency.value = 6000
+    env(g, t, 0.003, 0.16, 0.35)
+    o.connect(lp).connect(g).connect(sfx); g.connect(verb); o.start(t); o.stop(t + 0.4)
+  }
+  function tick(t, v = 1) {
+    const s = noise(t, 0.012), hp = ctx.createBiquadFilter(), g = ctx.createGain()
+    hp.type = 'highpass'; hp.frequency.value = 5000
+    env(g, t, 0.0005, 0.22 * v, 0.01)
+    s.connect(hp).connect(g).connect(sfx)
+  }
+  function alarm(t) {
+    for (let i = 0; i < 3; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sawtooth'
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2200
+      o.frequency.setValueAtTime(note(76), t + i * 0.26); o.frequency.setValueAtTime(note(71), t + i * 0.26 + 0.13)
+      env(g, t + i * 0.26, 0.004, 0.09, 0.24)
+      o.connect(lp).connect(g).connect(sfx); g.connect(verb); o.start(t + i * 0.26); o.stop(t + i * 0.26 + 0.3)
+    }
+  }
+
+  // ── the arrangement ──
+  // intro 0–4: a pulse that builds · drive 4–42 · tension 42–48 · build 48–56 · drop 56–62 · tail 62–66
+  const sectionAt = t => (spec.sections.find(s => t >= s.from && t < s.to) ?? { kind: 'none' })
+  if (!spec.noMusic) {
+    for (let bar = 0; bar * BAR < spec.duration; bar++) {
+      const t = bar * BAR
+      const sec = sectionAt(t)
+      const k = sec.kind
+      const ci = bar % 4
+      const chord = PROG[ci]
+      const prog = (t - sec.from) / Math.max(0.001, sec.to - sec.from)
+      if (k === 'none') continue
+      if (k === 'tail') {
+        if (t < 62.01) { for (const n of [...PROG[0], 69]) supersaw(t, n, BAR * 1.6, 1, 2600) }
+        continue
+      }
+      for (let b = 0; b < 4; b++) {
+        const tb = t + b * BEAT
+        const full = k === 'drive' || k === 'drop'
+        // kick
+        if (full || (k === 'build' && (prog < 0.5 ? b % 2 === 0 : true)) || (k === 'intro' && t + b * BEAT >= 3)) kick(tb, k === 'intro' ? 0.6 : 1)
+        // snare/clap on 2 and 4
+        if (full && (b === 1 || b === 3)) { clap(tb); snare(tb, 0.6) }
+        // hats: closed 16ths, open on the offbeat
+        if (full || k === 'build' || k === 'tension') {
+          for (let s = 0; s < 4; s++) hat(tb + s * S16, s === 2 ? 0.9 : 0.5 + 0.15 * (s % 2))
+          if (full || k === 'build') hat(tb + 2 * S16, 0.8, true)
+        }
+        if (k === 'intro') hat(tb + 2 * S16, 0.15 + prog * 0.5)
+        // rolling bass
+        if (full) bass16(tb, ROOT[ci], k === 'drop' ? 1 : 0.6 + 0.25 * Math.sin(bar))
+        if (k === 'tension') bass16(tb, ROOT[ci], 0.12 + prog * 0.3, 0.8)
+        if (k === 'build') bass16(tb, ROOT[ci], 0.2 + prog * 0.8, 0.9)
+        if (k === 'intro' && t + b * BEAT >= 1) bass16(tb, ROOT[0], 0.03 + prog * prog * 0.45, 0.15 + prog * prog * 0.55)
+        // offbeat stabs
+        if (full) stab(tb + BEAT / 2, chord, 0.8, k === 'drop' ? 5000 : 3200)
+        // arp
+        if (full || k === 'build' || k === 'tension') {
+          for (let s = 0; s < 4; s++) pluck(tb + s * S16, chord[(b * 4 + s) % 3] + 24 - (s === 3 ? 12 : 0), k === 'tension' ? 0.6 : 0.85, s % 2 ? 0.35 : -0.35)
+        }
+      }
+      // the hook every other phrase in the drive, all the way through the drop
+      if ((k === 'drive' && Math.floor(bar / 2) % 4 >= 2 && bar % 2 === 0 && t >= 12) || (k === 'drop' && bar % 2 === 0)) hook(t, k === 'drop' ? 1.2 : 0.85, k === 'drop' ? 6500 : 4200)
+    }
+    for (const c of spec.crashes ?? []) crash(c, 1)
+    for (const f of spec.fills ?? []) fill(f[0], f[1])
+    for (const r of spec.risers ?? []) riser(r.t, r.len, r.v ?? 1)
+  }
+
+  for (const c of spec.cues) {
+    switch (c.kind) {
+      case 'impact': impact(c.t, c.v ?? 1); break
+      case 'whoosh': whoosh(c.t, c.len ?? 0.6, c.v ?? 1, c.dir ?? 1); break
+      case 'blip': blip(c.t, c.i ?? 0, c.v ?? 1, c.pan ?? 0); break
+      case 'pop': pop(c.t, c.v ?? 1, c.pan ?? 0); break
+      case 'error': error(c.t); break
+      case 'success': success(c.t); break
+      case 'typing': typing(c.t, c.t + (c.len ?? 1)); break
+      case 'zap': zap(c.t); break
+      case 'tick': tick(c.t, c.v ?? 1); break
+      case 'alarm': alarm(c.t); break
+      case 'riser': riser(c.t, c.len, c.v ?? 1); break
+    }
+  }
+
+  const buf = await ctx.startRendering()
+  const L = buf.getChannelData(0), R = buf.getChannelData(1)
+  let peak = 0
+  for (let i = 0; i < L.length; i++) peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i]))
+  const gain = peak > 0 ? 0.92 / peak : 1
+  const n = L.length
+  const ab = new ArrayBuffer(44 + n * 4)
+  const dv = new DataView(ab)
+  const str = (o, s) => [...s].forEach((c, i) => dv.setUint8(o + i, c.charCodeAt(0)))
+  str(0, 'RIFF'); dv.setUint32(4, 36 + n * 4, true); str(8, 'WAVE'); str(12, 'fmt ')
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 2, true); dv.setUint32(24, SR, true)
+  dv.setUint32(28, SR * 4, true); dv.setUint16(32, 4, true); dv.setUint16(34, 16, true); str(36, 'data'); dv.setUint32(40, n * 4, true)
+  for (let i = 0, o = 44; i < n; i++, o += 4) {
+    // a soft clip keeps the loud parts loud without hard clipping
+    const sl = Math.tanh(L[i] * gain * 1.08) / Math.tanh(1.08)
+    const sr = Math.tanh(R[i] * gain * 1.08) / Math.tanh(1.08)
+    dv.setInt16(o, clamp(sl, -1, 1) * 32767, true)
+    dv.setInt16(o + 2, clamp(sr, -1, 1) * 32767, true)
+  }
+  const bytes = new Uint8Array(ab)
+  let s = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+</script>
+</body>
+</html>
