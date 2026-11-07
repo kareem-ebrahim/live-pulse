@@ -1,5 +1,5 @@
 node_modules/
 .claude-plugin/types/
-video/out/
 *.log
 .DS_Store
+video/

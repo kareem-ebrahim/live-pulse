@@ -45,7 +45,6 @@ Windows Terminal window ◀────────────── dashboard/
   `agent.spawn`, `turn.complete`, `session.append` and `session.end`, and reads the context window from `$.session.usage()`.
 - **`dashboard/`** — the renderer: a diffing true-colour cell buffer, wires with sparks, pixel
   creatures in half blocks, a small syntax highlighter and an LCS diff. Plain Node, no packages.
-- **`video/`** — renders the demo video from the dashboard's own drawing code.
 
 ### Privacy
 
@@ -135,17 +134,6 @@ In the window — mouse or keys:
 | `─` `□` `✕` (top right) | minimise · window / full screen · close |
 | `M` · `W` | next monitor · window / full screen |
 | `Q` | quit |
-
-## Render the video
-
-```
-cd video
-npm install
-npm run video            # → video/out/live-pulse.mp4 (1920×1080, 60 fps, with its own music)
-node make-video.mjs --stills 10,21,33    # single frames, for checking
-```
-
-It uses Microsoft Edge (or Chrome) to paint frames and `ffmpeg-static` to encode them.
 
 ## Develop
 
