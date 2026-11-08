@@ -45,6 +45,16 @@ export function emptyState() {
     updatedAt: 0,
     ctxWindow: 0,
     ctxPct: 0,
+    costUsd: 0,
+    limits: [],
+    waiting: undefined,
+    attention: undefined,
+    turnLog: [],
+    history: [],
+    compacts: [],
+    mcp: {},
+    repo: undefined,
+    bg: [],
   }
 }
 
@@ -59,6 +69,9 @@ const snapCache = new Map()
 const evState = new Map() // sid -> { last: seq, items: [], byId: Map }
 let lastPoll = 0
 let lastTidy = 0
+
+/** Called with (sid, event) for every new event read; the alerts and AUTO listen. */
+export const listeners = []
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -174,6 +187,13 @@ function readEvents(sid) {
     }
     ev.last = seq
     absorb(sid, ev, e)
+    for (const fn of listeners) {
+      try {
+        fn(sid, e)
+      } catch {
+        // a listener must never stop the reading
+      }
+    }
     store.version++
   }
   if (ev.items.length > KEEP_EVENTS) {
@@ -213,6 +233,8 @@ function absorb(sid, ev, e) {
     ms: e.ms,
     running: e.kind === 'call',
     endT: e.kind === 'done' ? e.t : undefined,
+    turn: e.turn,
+    attention: e.attention,
   }
   ev.items.push(it)
   if (e.id) ev.byId.set(e.id, it)

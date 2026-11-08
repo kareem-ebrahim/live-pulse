@@ -15,6 +15,18 @@ const KEYS = [
   [ESC + '[4~', 'end'],
   [ESC + 'OF', 'end'],
   [ESC + '[Z', 'shift-tab'],
+  [ESC + 'OP', 'f1'],
+  [ESC + 'OQ', 'f2'],
+  [ESC + 'OR', 'f3'],
+  [ESC + 'OS', 'f4'],
+  [ESC + '[11~', 'f1'],
+  [ESC + '[12~', 'f2'],
+  [ESC + '[13~', 'f3'],
+  [ESC + '[14~', 'f4'],
+  [ESC + '[15~', 'f5'],
+  [ESC + '[17~', 'f6'],
+  [ESC + '[18~', 'f7'],
+  [ESC + '[24~', 'f12'],
 ]
 
 export const MOUSE_ON = ESC + '[?1000h' + ESC + '[?1006h'

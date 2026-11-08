@@ -37,6 +37,8 @@ export type PulseAgentRun = {
   current: string
   started: number
   ms?: number
+  /** the card of the subagent that started this one; absent when the main loop did */
+  parent?: string
 }
 
 /** A file the session edited: the path relative to the project when inside it. */
@@ -50,6 +52,9 @@ export type PulseFile = {
   tool: string
   agent?: string
   agentKey?: string
+  /** lines written and taken out, over all its edits */
+  added?: number
+  removed?: number
 }
 
 /** A task running in the background: a shell, a monitor, a background agent. */
@@ -67,6 +72,43 @@ export type PulseBgTask = {
 }
 
 export type PulsePhase = 'idle' | 'thinking' | 'writing' | 'tool' | 'agents'
+
+/** The session is waiting for the person: a permission prompt, a question, a plan to approve. */
+export type PulseAttention = {
+  kind: 'permission' | 'question' | 'plan'
+  tool: string
+  label: string
+  since: number
+  id?: string
+}
+
+/** One turn of the main loop, measured. */
+export type PulseTurn = {
+  n: number
+  start: number
+  end?: number
+  ms?: number
+  /** milliseconds spent thinking, writing and in tools */
+  think: number
+  write: number
+  tools: number
+  calls: number
+  errors: number
+  cats: Partial<Record<PulseCat, number>>
+  files: number
+  agents: number
+  cost: number
+  inTok: number
+  outTok: number
+  cacheRead: number
+  cacheWrite: number
+  aborted?: boolean
+}
+
+/** A sample every ten seconds, for the charts. */
+export type PulseSample = { t: number; cost: number; out: number; ctx: number; calls: number }
+
+export type PulseCompact = { t: number; trigger: string; before: number; after?: number }
 
 export type Pulse = {
   model: string
@@ -93,6 +135,13 @@ export type Pulse = {
   bg: PulseBgTask[]
   log: PulseLogLine[]
   startedAt: number
+  attention?: PulseAttention
+  turnLog: PulseTurn[]
+  history: PulseSample[]
+  compacts: PulseCompact[]
+  /** calls per MCP server */
+  mcp: Record<string, number>
+  repo?: { root: string; remote: string | null }
 }
 
 declare module 'claude-code' {

@@ -6,6 +6,7 @@
 //   node pulse-dash.mjs                                the live window
 //   node pulse-dash.mjs --html out.html --size 200x56
 //
+// Pages: F1-F6 or [ ] · F12 or g AUTO (tours pages and sessions by itself) · t toast · n sound
 // Keys: Tab / Shift+Tab session · a follow active · l full log · ←→ 1-9 log tabs
 //       ↑↓ PgUp PgDn Home End log · f follow newest · m / M next / previous monitor
 //       w window / full screen · q quit
@@ -17,7 +18,12 @@ import { fileURLToPath } from 'node:url'
 import { ALIVE, SESS, focused, poll, store } from './data.mjs'
 import { MOUSE_OFF, MOUSE_ON, parseInput } from './input.mjs'
 import { minimize, place, startWindow, stopWindow, watch, win } from './window.mjs'
-import { actions, cycleSession, frame, toggleFull, ui } from './scene.mjs'
+import { actions, cycleSession, frame, pageKey, personActed, setPage, stepPage, toggleAuto, toggleFull, ui } from './scene.mjs'
+import { view as overviewView } from './pages/overview.mjs'
+import { setAuto } from './director.mjs'
+import { motion } from './anim.mjs'
+import { startAlerts, stopAlerts, toggleSound, toggleToast } from './alerts.mjs'
+import { startTotals, stopTotals, totalsNow } from './totals.mjs'
 import { Screen } from './screen.mjs'
 import { logKey, logUi } from './views/log.mjs'
 
@@ -32,8 +38,13 @@ if (opt('--html')) {
   const [w, h] = (opt('--size') || '200x56').split('x').map(Number)
   const S = new Screen(w, h)
   if (opt('--pick')) store.pinned = opt('--pick')
-  if (argv.includes('--full-log')) ui.fullLog = true
+  if (argv.includes('--full-log')) overviewView.fullLog = true
+  if (opt('--page')) ui.page = opt('--page')
+  if (argv.includes('--auto')) setAuto(true)
   if (opt('--shell')) logUi.bg = opt('--shell')
+  motion.wipe = false
+  motion.countUp = false
+  if (opt('--page') === 'totals' || argv.includes('--auto')) totalsNow()
   poll(Date.now(), true)
   for (let i = 0; i < 40; i++) frame(S, Number(opt('--t') || 3.3), Date.now())
   fs.writeFileSync(opt('--html'), S.toHtml())
@@ -65,6 +76,8 @@ function quit() {
     // already gone
   }
   stopWindow()
+  stopAlerts()
+  stopTotals()
   out.write(MOUSE_OFF + '\x1b[0m\x1b[?25h\x1b[?1049l')
   process.exit(0)
 }
@@ -84,11 +97,43 @@ if (process.stdin.isTTY) {
     for (const ev of parseInput(d.toString())) {
       if (ev.type === 'mouse') {
         const r = S.hitAt(ev.x, ev.y)
-        if (ev.b === 64 || ev.b === 65) r?.onWheel?.(ev.b === 64 ? -1 : 1)
-        else if (ev.b === 0 && ev.down) r?.onClick?.(ev)
+        if (ev.b === 64 || ev.b === 65) {
+          personActed()
+          r?.onWheel?.(ev.b === 64 ? -1 : 1)
+        } else if (ev.b === 0 && ev.down) {
+          r?.onClick?.(ev)
+          if (r && !r.keepsAuto) personActed()
+        }
         continue
       }
+      if (ev.key !== 'f12' && ev.key !== 'g') personActed()
+      if (ui.page !== 'overview' && pageKey(ev.key)) continue
       switch (ev.key) {
+        case 'f1':
+        case 'f2':
+        case 'f3':
+        case 'f4':
+        case 'f5':
+        case 'f6':
+        case 'f7':
+          setPage(['overview', 'timeline', 'network', 'files', 'cost', 'inspector', 'totals'][Number(ev.key.slice(1)) - 1])
+          break
+        case '[':
+          stepPage(-1)
+          break
+        case ']':
+          stepPage(1)
+          break
+        case 'f12':
+        case 'g':
+          toggleAuto()
+          break
+        case 't':
+          toggleToast()
+          break
+        case 'n':
+          toggleSound()
+          break
         case 'q':
         case 'ctrl-c':
           return quit()
@@ -139,7 +184,7 @@ if (startWindow()) {
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const stamp = () => {
   let n = 0
-  for (const dir of [HERE, path.join(HERE, 'views')]) {
+  for (const dir of [HERE, path.join(HERE, 'views'), path.join(HERE, 'pages')]) {
     try {
       for (const f of fs.readdirSync(dir)) if (/\.(mjs|ps1)$/.test(f)) n += fs.statSync(path.join(dir, f)).mtimeMs
     } catch {
@@ -157,10 +202,16 @@ setInterval(() => {
     clearInterval(hb)
     clearInterval(loop)
     stopWindow()
+    stopAlerts()
+    stopTotals()
     out.write(MOUSE_OFF + '\x1b[0m\x1b[?25h\x1b[?1049l')
     process.exit(75)
   }, 400) // let a copy in progress finish
 }, 1000)
+
+startAlerts()
+startTotals()
+if (argv.includes('--auto')) setAuto(true)
 
 const t0 = Date.now()
 const loop = setInterval(() => {

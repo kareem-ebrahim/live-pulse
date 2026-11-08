@@ -6,6 +6,66 @@ import { P, SPIN, clamp, fit, fitTail, kfmt, len, mix, projectName, usd } from '
 import { accentOf, conflicts, ctxPct, lastEventAt, messages, stateOf, store, visibleBg } from '../data.mjs'
 import { creature } from '../pixels.mjs'
 import { Wires, curve, sparks } from '../wires.mjs'
+import { itemsOf } from '../data.mjs'
+import { burst, confetti, ring } from '../anim.mjs'
+
+// what each session looked like last frame, to notice births and endings
+const memo = new Map()
+
+/** Moods and moments around a creature: needs-you bubble, zzz, sweat, notes, bursts. */
+function moods(S, st, g, y, t, now, ac, bg) {
+  const sid = st.sessionId
+  const m = memo.get(sid) ?? { agents: -1, turns: -1, at: now }
+  const running = (st.agents || []).filter(a => a.status === 'running').length
+  const items = itemsOf(sid)
+  const lastSummary = [...items].reverse().find(i => i.kind === 'turn-summary')
+  // a subagent born: sparks fly off the creature
+  if (m.agents >= 0 && running > m.agents) {
+    burst(g.right[0], g.cy, P.haiku, 16)
+    ring(g.cx, g.cy, ac, { max: 6 })
+  }
+  // a turn finished: a ring, confetti after a long one
+  if (m.turns >= 0 && st.turns === m.turns && lastSummary && lastSummary.t > m.at && now - lastSummary.t < 3000 && !m.celebrated?.has(lastSummary.key)) {
+    m.celebrated = m.celebrated ?? new Set()
+    m.celebrated.add(lastSummary.key)
+    ring(g.cx, g.cy, lastSummary.turn?.errors ? P.warn : P.ok, { max: 9, life: 1200 })
+    if ((lastSummary.turn?.ms ?? 0) > 60000 && !lastSummary.turn?.errors) confetti(g.cx, g.cy - 2, [ac, P.cream, P.router, P.peach])
+  }
+  memo.set(sid, { ...m, agents: running, turns: st.turns, at: m.at })
+
+  const head = y
+  if (st.attention) {
+    // a speech bubble: the session waits for the person
+    const glow = 0.5 + 0.5 * Math.sin(t * 6)
+    const label = st.attention.kind === 'permission' ? ' ! ALLOW? ' : st.attention.kind === 'question' ? ' ! QUESTION ' : ' ! PLAN '
+    const bx = Math.min(g.right[0] - 2, S.w - len(label) - 3)
+    const fill = mix(P.warn, P.text, glow * 0.25)
+    S.text(bx, head, label, P.bg, { bold: true, bg: fill })
+    S.set(bx + 1, head + 1, '◤', fill, bg)
+    return
+  }
+  const lastCall = [...items].reverse().find(i => i.kind === 'call')
+  const idleFor = now - (items.length ? items[items.length - 1].t : st.updatedAt || now)
+  if (lastCall && lastCall.ok === false && now - (lastCall.endT ?? lastCall.t) < 8000) {
+    // sweat: a call just failed
+    for (let k = 0; k < 3; k++) {
+      const yy = head + ((t * 3 + k * 0.7) % 3)
+      S.set(g.left[0] + 2 + k * 2, yy, k % 2 ? '°' : ',', mix(P.blue, bg, ((t * 3 + k * 0.7) % 3) / 3), bg)
+    }
+  } else if (st.phase === 'idle' && idleFor > 45000) {
+    // asleep: z Z z drifting up
+    for (let k = 0; k < 3; k++) {
+      const u = (t * 0.6 + k / 3) % 1
+      S.set(g.right[0] - 1 + k + Math.round(u * 2), head + 2 - Math.round(u * 2), k === 1 ? 'Z' : 'z', mix(P.mid, bg, u), bg)
+    }
+  } else if (lastSummary && now - lastSummary.t < 5000 && !lastSummary.turn?.errors) {
+    // happy: notes float up after a clean turn
+    for (let k = 0; k < 2; k++) {
+      const u = ((now - lastSummary.t) / 5000 + k * 0.4) % 1
+      S.set(g.right[0] - 1 + k * 3, head + 2 - Math.round(u * 2), k ? '♫' : '♪', mix(P.router, bg, u), bg)
+    }
+  }
+}
 
 const STATE_WORD = { working: 'WORKING', idle: 'IDLE', ended: 'ENDED', silent: 'NO SIGNAL' }
 const STATE_COLOR = { working: P.router, idle: P.mid, ended: P.dim, silent: P.warn }
@@ -59,6 +119,7 @@ export function drawConstellation(S, x, y, w, h, t, now, focusId) {
       bg,
     })
     geo.push({ sid, g, busy, ac })
+    moods(S, st, g, y, t, now, ac, bg)
     slots.set(sid, { x: sx, w: slotW - 1, cx: sx + Math.floor((slotW - 1) / 2), bottom: y + h - 1 })
 
     // the three lines under it

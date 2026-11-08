@@ -1,16 +1,38 @@
-// The dashboard's drawing: everything one frame shows, from the state in
-// data.mjs. The live window (pulse-dash.mjs) and the video tool both draw
-// through frame(); neither needs the other.
-import { CAT_COLOR, P, SPIN, clamp, clock, fit, kfmt, len, limitName, mix, pretty, projectName, secs, usd } from './common.mjs'
-import { accentOf, allItems, callsPerMinute, ctxPct, focused, liveSessions, planLimits, stateOf, store, totalCost } from './data.mjs'
+// The dashboard's frame: title bar, header, the page tabs with AUTO, the page
+// itself, the alert stack and the status bar. The live window (pulse-dash.mjs)
+// and the --html previews both draw through frame().
+import { P, SPIN, clock, len, limitName, mix, pretty, projectName, usd } from './common.mjs'
+import { accentOf, callsPerMinute, emptyState, focused, liveSessions, planLimits, stateOf, store, totalCost } from './data.mjs'
 import { win } from './window.mjs'
-import { Screen, centerX } from './screen.mjs'
-import { drawConstellation } from './views/constellation.mjs'
-import { drawLog, logUi } from './views/log.mjs'
-import { drawSession } from './views/session.mjs'
-import { Wires, sparks } from './wires.mjs'
+import { centerX } from './screen.mjs'
+import { logUi } from './views/log.mjs'
+import { drawParticles, drawRings, drawWipe, startWipe } from './anim.mjs'
+import { alerts, settings, toggleSound, toggleToast } from './alerts.mjs'
+import { auto, autoActive, autoProgress, autoTick, pauseAuto, setAuto } from './director.mjs'
+import { drawOverview, view as overviewView } from './pages/overview.mjs'
+import { drawTimeline, timelineKey } from './pages/timeline.mjs'
+import { drawNetwork } from './pages/network.mjs'
+import { drawFiles } from './pages/files.mjs'
+import { drawCost } from './pages/cost.mjs'
+import { drawInspector, inspectorKey } from './pages/inspector.mjs'
+import { drawTotals } from './pages/totals.mjs'
 
-export const ui = { fullLog: false }
+export const PAGES = [
+  { id: 'overview', title: 'Overview', key: 'F1', draw: drawOverview },
+  { id: 'timeline', title: 'Timeline', key: 'F2', draw: drawTimeline, onKey: timelineKey },
+  { id: 'network', title: 'Network', key: 'F3', draw: drawNetwork },
+  { id: 'files', title: 'Files', key: 'F4', draw: drawFiles },
+  { id: 'cost', title: 'Cost', key: 'F5', draw: drawCost },
+  { id: 'inspector', title: 'Inspector', key: 'F6', draw: drawInspector, onKey: inspectorKey },
+  { id: 'totals', title: 'Totals', key: 'F7', draw: drawTotals },
+]
+
+export const ui = {
+  page: 'overview',
+  get fullLog() {
+    return overviewView.fullLog
+  },
+}
 export const actions = {
   quit: () => {},
   minimize: () => {},
@@ -18,13 +40,43 @@ export const actions = {
   monitor: () => {},
 }
 
+/** Shows a page; `byPerson` pauses AUTO, as any touch does. */
+export function setPage(id, byPerson = true) {
+  if (byPerson) personActed()
+  if (ui.page !== id) startWipe()
+  ui.page = id
+}
+export function stepPage(step) {
+  const i = PAGES.findIndex(p => p.id === ui.page)
+  setPage(PAGES[(i + step + PAGES.length) % PAGES.length].id)
+}
+export function toggleAuto() {
+  setAuto(!auto.on)
+  if (!auto.on) store.pinned = ''
+}
+/** A key or a click: AUTO steps aside, leaving what it showed in place. */
+export function personActed() {
+  if (autoActive()) {
+    if (auto.sid) store.pinned = auto.sid
+    pauseAuto()
+  }
+}
+/** Keys a page handles itself (returns true when it took the key). */
+export function pageKey(key) {
+  const p = PAGES.find(x => x.id === ui.page)
+  return p?.onKey ? p.onKey(key) === true : false
+}
+alerts.onOpen = sid => {
+  personActed()
+  store.pinned = sid
+  setPage('inspector', false)
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // The top rows
 // ════════════════════════════════════════════════════════════════════════════
-
-/** Window buttons, as on any window: minimise, maximise / restore, close. Ends at column x. */
 export const CONTROLS_W = 12
-function controls(S, x, y, bg) {
+function controls(S, x, y) {
   const items = [
     [' ─ ', P.mid, () => actions.minimize()],
     [' □ ', P.mid, () => actions.window()],
@@ -36,7 +88,6 @@ function controls(S, x, y, bg) {
     S.hit(cx, y, 3, 1, { onClick: fn })
     cx += 4
   }
-  void bg
 }
 
 function totals(now) {
@@ -45,13 +96,16 @@ function totals(now) {
   const cpm = store.sessions.reduce((n, s) => n + callsPerMinute(s, now), 0)
   const agents = store.sessions.reduce((n, s) => n + (s.agents || []).filter(a => a.status === 'running').length, 0)
   const editing = store.sessions.reduce((n, s) => n + (s.files || []).filter(f => f.active).length, 0)
-  return { live, working, cpm, agents, editing }
+  const needs = live.filter(s => s.attention).length
+  return { live, working, cpm, agents, editing, needs }
 }
 
-function headerParts(now) {
-  const { live, working, cpm, agents, editing } = totals(now)
+function headerParts(now, t) {
+  const { live, working, cpm, agents, editing, needs } = totals(now)
+  const blink = 0.5 + 0.5 * Math.sin(t * 6)
   return [
     [['CLAUDE CODE LIVE', P.text, true]],
+    ...(needs ? [[[`! ${needs} NEED${needs === 1 ? 'S' : ''} YOU`, mix(P.warn, P.text, blink * 0.4), true]]] : []),
     [[`${live.length} SESSION${live.length === 1 ? '' : 'S'}`, P.opus, true]],
     [[`${usd(totalCost(live))} SPENT`, P.cream, true]],
     ...planLimits()
@@ -64,10 +118,56 @@ function headerParts(now) {
   ]
 }
 const SEP = [['  ·  ', P.dim]]
-const partsLen = parts => parts.reduce((n, p) => n + len(p[0]), 0)
 
-
-
+/** The page tabs, AUTO first. */
+function tabs(S, y, t, now) {
+  const W = S.w
+  S.rect(0, y, W, 1, P.panel)
+  let x = 1
+  // AUTO: its pill fills up as the current view runs out
+  const on = auto.on
+  const active = autoActive(now)
+  const label = active ? ' ◉ AUTO ' : on ? ' ◎ AUTO ' : ' ○ AUTO '
+  const fill = active ? Math.round(autoProgress(now) * len(label)) : 0
+  ;[...label].forEach((c, i) => {
+    const lit = active && i < fill
+    const bg = active ? (lit ? P.router : mix(P.router, P.panel, 0.55)) : on ? mix(P.warn, P.panel, 0.6) : P.faint
+    const fg = active ? P.bg : on ? P.text : P.mid
+    S.set(x + i, y, c, i === 1 && active ? mix(P.bg, P.text, 0.5 + 0.5 * Math.sin(t * 5)) : fg, bg, true)
+  })
+  S.hit(x, y, len(label), 1, { onClick: () => toggleAuto() })
+  x += len(label) + 1
+  S.text(x, y, '│', P.faint, { bg: P.panel })
+  x += 2
+  const narrow = S.w < 150
+  for (const p of PAGES) {
+    const sel = ui.page === p.id
+    const key = narrow ? '' : `${p.key} `
+    const s = ` ${key}${p.title} `
+    const ac = sel ? (active ? P.router : P.opus) : P.mid
+    S.text(x, y, s, sel ? P.bg : ac, { bold: sel, bg: sel ? ac : P.panel })
+    if (!sel && key) S.text(x + 1, y, key, P.dim, { bg: P.panel })
+    S.hit(x, y, len(s), 1, { onClick: () => setPage(p.id) })
+    x += len(s) + 1
+  }
+  // what AUTO is doing, at the right
+  let cap
+  let capColor = P.dim
+  if (active) {
+    const st = store.sessions.find(s => s.sessionId === auto.sid)
+    const why = auto.reason && !auto.reason.startsWith('tour') ? auto.reason : st ? projectName(st.cwd) : ''
+    cap = `AUTO · ${PAGES.find(p => p.id === auto.page)?.title ?? ''}${why ? ` · ${why}` : ''}`
+    capColor = P.router
+  } else if (on) {
+    cap = `AUTO paused · back in ${Math.max(0, Math.ceil((auto.pausedUntil - now) / 1000))}s`
+    capColor = P.warn
+  } else cap = 'F12 or click AUTO to tour by itself'
+  const room = W - x - 2
+  if (room > 12) {
+    const c = len(cap) > room ? [...cap].slice(0, room - 1).join('') + '…' : cap
+    S.text(W - 1 - len(c), y, c, capColor, { bg: P.panel })
+  }
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // One frame
@@ -76,78 +176,81 @@ function draw(S, t, now) {
   const W = S.w
   const H = S.h
   S.fill(P.bg)
-  if (W < 100 || H < 33) {
-    const msg = `widen this window to at least 100×33 (now ${W}×${H})`
+  if (W < 100 || H < 34) {
+    const msg = `widen this window to at least 100×34 (now ${W}×${H})`
     S.text(centerX(0, W, msg), Math.floor(H / 2), msg, P.coral, { bold: true })
-    controls(S, W - 2, 0, P.bg)
+    controls(S, W - 2, 0)
     return
   }
-  const st = focused(now)
-  let cy
-  {
-    // a plain title bar and header
-    const { live } = totals(now)
-    S.rect(0, 0, W, 1, P.bar)
-    controls(S, W - 1, 0, P.bar)
-    const ttl = 'Live Pulse · every Claude Code session on this machine'
-    S.text(centerX(0, W, ttl), 0, ttl, P.mid, { bg: P.bar })
-    const tag = `${live.length} LIVE`
-    S.segs(W - len(tag) - 4 - CONTROLS_W - 1, 0, [['● ', live.length ? P.router : P.dim], [tag, live.length ? P.router : P.dim, true]], { bg: P.bar })
-    const head = headerParts(now).flatMap((p, i) => (i ? [...SEP, ...p] : p))
-    S.segs(centerX(0, W, head.map(h => h[0]).join('')), 1, head)
-    cy = 3
+  // AUTO picks the page and the session
+  const v = autoTick(now)
+  if (v) {
+    if (ui.page !== v.page) startWipe()
+    ui.page = v.page
   }
+  const st = (v && store.sessions.find(s => s.sessionId === v.sid)) || focused(now) || emptyState()
 
-  // creatures, one per session
-  const constH = H >= 60 ? 12 : H >= 48 ? 10 : 9
-  const slots = drawConstellation(S, 1, cy, W - 2, constH, t, now, st.sessionId)
-  const afterConst = cy + constH + 1
+  // title bar and header
+  const { live } = totals(now)
+  S.rect(0, 0, W, 1, P.bar)
+  controls(S, W - 1, 0)
+  const ttl = 'Live Pulse · every Claude Code session on this machine'
+  S.text(centerX(0, W, ttl), 0, ttl, P.mid, { bg: P.bar })
+  const tag = `${live.length} LIVE`
+  S.segs(W - len(tag) - 4 - CONTROLS_W - 1, 0, [['● ', live.length ? P.router : P.dim], [tag, live.length ? P.router : P.dim, true]], { bg: P.bar })
+  const head = headerParts(now, t).flatMap((p, i) => (i ? [...SEP, ...p] : p))
+  S.segs(centerX(0, W, head.map(h => h[0]).join('')), 1, head)
+  tabs(S, 2, t, now)
 
-  // the selected session, then the log
+  // the page
   const statusY = H - 1
-  // running subagents each need four more rows in the agents map; the log gives way
-  const subs = (st.agents || []).filter(a => a.status === 'running' || now - (a.started + (a.ms || 0)) < 5 * 60000).length + (st.bg || []).filter(b => b.kind !== 'agent' && (b.status === 'running' || now - (b.ended ?? 0) < 4000)).length
-  const needs = 26 + 4 * Math.min(3, subs)
-  const logH = ui.fullLog ? statusY - afterConst : clamp(statusY - (afterConst + 1) - needs - 1, 9, 22)
-  const logY = statusY - logH
-  if (!ui.fullLog) {
-    const slot = slots.get(st.sessionId)
-    drawSession(S, st, afterConst + 1, logY - 2, t, now, slot ? { x: slot.cx, y: slot.bottom + 1 } : undefined)
-  }
-  logUi.expanded = ui.fullLog
-  drawLog(S, st, 1, logY, W - 2, logH, t, now)
+  const page = PAGES.find(p => p.id === ui.page) ?? PAGES[0]
+  page.draw(S, st, 3, statusY, t, now)
+  drawRings(S, now)
+  drawParticles(S, now)
+  drawWipe(S, 3, statusY, now)
 
-  // status bar: every action is a button
+  statusBar(S, st, statusY, t, now)
+}
+
+function statusBar(S, st, y, t, now) {
+  const W = S.w
   const working = store.sessions.filter(s => stateOf(s, now) === 'working')
   const spin = SPIN[Math.floor(t * 12) % 10]
   const sel = st.sessionId ? `${projectName(st.cwd)} · ${pretty(st.model)}` : 'no session'
-  S.rect(0, statusY, W, 1, P.bar)
+  S.rect(0, y, W, 1, P.bar)
   let bx = 1
-  S.text(bx, statusY, sel, st.sessionId ? accentOf(st.sessionId) : P.dim, { bold: true, bg: P.bar })
+  S.text(bx, y, sel, st.sessionId ? accentOf(st.sessionId) : P.dim, { bold: true, bg: P.bar })
   bx += len(sel) + 1
-  S.text(bx, statusY, store.pinned ? 'pinned' : 'following', P.dim, { bg: P.bar })
-  bx += (store.pinned ? 6 : 9) + 2
+  const mode = autoActive(now) ? 'auto' : store.pinned ? 'pinned' : 'following'
+  S.text(bx, y, mode, P.dim, { bg: P.bar })
+  bx += len(mode) + 2
   const btn = (key, label, fn, on) => {
     const k = ` ${key} `
-    S.text(bx, statusY, k, on ? P.bg : P.text, { bold: true, bg: on ? P.router : P.faint })
-    S.text(bx + len(k), statusY, ` ${label} `, on ? P.router : P.mid, { bg: P.bar })
-    S.hit(bx, statusY, len(k) + len(label) + 2, 1, { onClick: fn })
+    S.text(bx, y, k, on ? P.bg : P.text, { bold: true, bg: on ? P.router : P.faint })
+    S.text(bx + len(k), y, ` ${label} `, on ? P.router : P.mid, { bg: P.bar })
+    S.hit(bx, y, len(k) + len(label) + 2, 1, { onClick: fn })
     bx += len(k) + len(label) + 3
   }
   const tight = W < 185
   btn('◂', tight ? '' : 'prev', () => cycleSession(-1))
   btn('▸', tight ? 'next' : 'next session', () => cycleSession(1))
-  btn('A', tight ? 'follow' : 'follow active', () => (store.pinned = ''), !store.pinned)
-  btn('L', ui.fullLog ? 'dashboard' : tight ? 'log' : 'full log', () => toggleFull(), ui.fullLog)
-  btn('S', logUi.scope === 'all' ? (tight ? 'this' : 'this session') : tight ? 'all' : 'all sessions', () => logUi.setScope(logUi.scope === 'all' ? 'session' : 'all'), logUi.scope === 'all')
+  btn('A', tight ? 'follow' : 'follow active', () => {
+    personActed()
+    store.pinned = ''
+  }, !store.pinned && !autoActive(now))
+  btn('[ ]', 'page', () => stepPage(1))
+  if (ui.page === 'overview') {
+    btn('L', overviewView.fullLog ? 'dashboard' : tight ? 'log' : 'full log', () => toggleFull(), overviewView.fullLog)
+    if (!tight) btn('S', logUi.scope === 'all' ? 'this session' : 'all sessions', () => logUi.setScope(logUi.scope === 'all' ? 'session' : 'all'), logUi.scope === 'all')
+  }
+  btn('T', `toast ${settings.toast ? 'on' : 'off'}`, () => toggleToast(), settings.toast)
+  btn('N', `sound ${settings.sound ? 'on' : 'off'}`, () => toggleSound(), settings.sound)
   if (win.monitors > 1) btn('M', `screen ${win.monitor + 1}/${win.monitors}`, () => actions.monitor())
-  btn('W', win.cover ? 'window' : tight ? 'full' : 'full screen', () => actions.window())
+  if (W >= 160) btn('W', win.cover ? 'window' : tight ? 'full' : 'full screen', () => actions.window())
   btn('Q', 'quit', () => actions.quit())
   const right = `${working.length ? spin + ' ' : ''}${clock(now)}`
-  S.text(W - 2 - len(right), statusY, right, working.length ? P.router : P.dim, { bg: P.bar })
-  void fit
-  void kfmt
-  void CAT_COLOR
+  S.text(W - 2 - len(right), y, right, working.length ? P.router : P.dim, { bg: P.bar })
 }
 
 export function frame(S, t, now) {
@@ -155,15 +258,21 @@ export function frame(S, t, now) {
 }
 
 export function toggleFull() {
-  ui.fullLog = !ui.fullLog
+  personActed()
+  if (ui.page !== 'overview') {
+    setPage('overview')
+    overviewView.fullLog = true
+    return
+  }
+  overviewView.fullLog = !overviewView.fullLog
 }
 logUi.onExpand = () => toggleFull()
 
 export function cycleSession(step) {
+  personActed()
   const all = store.sessions
   if (!all.length) return
   const cur = focused(Date.now()).sessionId
   const i = Math.max(0, all.findIndex(s => s.sessionId === cur))
   store.pinned = all[(i + step + all.length) % all.length].sessionId
 }
-

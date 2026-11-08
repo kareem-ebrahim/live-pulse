@@ -1,6 +1,7 @@
 {
   "name": "live-pulse",
-  "version": "0.1.6",
-  "description": "A live full-screen dashboard of every Claude Code session on your machine: sessions, subagents, files, diffs, commands, background shells and context, in its own Windows Terminal window.",
-  "types": "./types/index.d.ts"
+  "version": "0.1.7",
+  "description": "A live mission-control screen for Claude Code: every session on your machine as animated creatures, with pages for the timeline, network, files, cost, a deep inspector and machine-wide totals, an AUTO tour mode, and Windows alerts when a session needs you.",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
 }

@@ -65,3 +65,40 @@ test('a background shell shows while it runs and goes when it ends', async ($, o
   await clock.advance(600)
   expect(JSON.parse(snaps[snaps.length - 1]).bg[0].status).toBe('done')
 })
+
+test('a question marks the session as needing the person; edits count lines; MCP calls count per server', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  mock.env(on, { USERPROFILE: 'C:\Users\me' })
+  mock.store(on, { autoWindow: false })
+  const writes: Array<{ path: string; text: string }> = []
+  on('fs.write', (_, e) => {
+    writes.push({ path: e.path.split(String.fromCharCode(92)).join('/'), text: e.text })
+    return { value: undefined }
+  })
+  on('fs.list', () => ({ value: [] }))
+  on('session.id', () => ({ value: 'sess-3' }))
+  on('session.repo', () => ({ value: { root: 'C:/proj', remote: 'https://github.com/me/proj.git' } }))
+  on('command.register', () => ({ value: { command: 'pulse' } }))
+  on('ui.close', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 10, window: 200000, percent: 0 }, rateLimits: [], cost: { usd: 0.5 } } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: { ok: true }, text: 'ok' }))
+
+  await $.session.start({ cwd: 'C:\proj', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [] })
+  await $.tool.call({ tool: 'Edit', file_path: 'C:\proj\a.ts', old_string: 'one', new_string: 'one\ntwo' })
+  await $.tool.call({ tool: 'mcp__github__get_issue', number: 1 })
+  await clock.advance(1200)
+
+  const events = writes.filter(w => w.path.includes('/events/sess-3/')).map(w => JSON.parse(w.text))
+  expect(events.some(ev => ev.kind === 'attention' && ev.attention?.kind === 'question')).toBe(true)
+  expect(events.some(ev => ev.kind === 'attention-clear')).toBe(true)
+  const snap = JSON.parse(writes.filter(w => w.path.endsWith('/sessions/sess-3.json')).pop()?.text ?? '{}')
+  expect(snap.attention).toBeUndefined()
+  expect(snap.files[0].added).toBe(2)
+  expect(snap.files[0].removed).toBe(1)
+  expect(snap.mcp.github).toBe(1)
+  expect(snap.repo.remote).toBe('https://github.com/me/proj.git')
+  expect(snap.costUsd).toBe(0.5)
+})

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Pulse, PulseAgentRun, PulseBgTask, PulseFile, PulseLogLine, PulseTone, PulseToolRun } from '../types'
+import type { Pulse, PulseAgentRun, PulseAttention, PulseBgTask, PulseFile, PulseLogLine, PulseTone, PulseToolRun, PulseTurn } from '../types'
 import { capLines, catOf, editedPath, emptyPulse, family, fit, labelOf, langOf, oneLine, prettyModel, relPath, secs } from './lib'
 
 // live-pulse records what this session does (turns, tool calls, subagents,
@@ -15,7 +15,7 @@ const PANE = 'live-pulse'
 // Change the tag when the record's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const pulseAtom = atom({ plugin: 'live-pulse', key: 'pulse' } as const, emptyPulse(0), {
-  shape: 'pulse-4',
+  shape: 'pulse-5',
 })
 
 const SEP = String.fromCharCode(10) + '⋯' + String.fromCharCode(10)
@@ -24,6 +24,9 @@ const MAX_LOG = 60
 const MAX_TOOLS = 40
 const MAX_AGENTS = 6
 const MAX_FILES = 24
+const MAX_TURNS = 40
+const MAX_SAMPLES = 360 // one per 10 s: an hour
+const MAX_COMPACTS = 20
 
 let live: Pulse = emptyPulse(Date.now())
 let dirty = true
@@ -66,7 +69,7 @@ function log(src: string, tone: PulseTone, msg: string, tag = '', tagTone: Pulse
  * dashboard's log reads these, code and all. Never holds what the person typed.
  */
 type PulseEvent = {
-  kind: 'call' | 'done' | 'turn' | 'turn-done' | 'agent' | 'agent-done' | 'note'
+  kind: 'call' | 'done' | 'turn' | 'turn-done' | 'agent' | 'agent-done' | 'note' | 'attention' | 'attention-clear' | 'compact' | 'turn-summary'
   id?: string
   agent?: string
   src: string
@@ -80,6 +83,8 @@ type PulseEvent = {
   code?: { lang: string; text: string }
   diff?: { path: string; lang: string; old: string; new: string }
   output?: string
+  turn?: PulseTurn
+  attention?: PulseAttention
 }
 
 async function emit($: EngineInterface, ev: PulseEvent): Promise<void> {
@@ -145,6 +150,8 @@ async function restore($: EngineInterface): Promise<void> {
   if (stored.startedAt > 0 && (stored.turns > 0 || stored.toolCount > 0)) {
     live = { ...emptyPulse(Date.now()), ...JSON.parse(JSON.stringify(stored)) }
     for (const f of live.files) f.active = false
+    // a prompt from before a reload is not on screen any more
+    live.attention = undefined
   }
 }
 
@@ -155,7 +162,7 @@ function finishAgent($: EngineInterface, card: PulseAgentRun, ok: boolean): void
   card.ms = Date.now() - card.started
   card.current = ok ? 'finished' : 'stopped'
   log(`@${card.type}`, ok ? 'ok' : 'err', `${ok ? 'finished' : 'failed'}: ${card.desc} · ${card.tools} tools`, ok ? `${secs(card.ms)} ✓` : 'failed ✗', ok ? 'ok' : 'err')
-  void emit($, { kind: 'agent-done', src: `@${card.type}`, tone: family(card.model || 'haiku'), ok, ms: card.ms, msg: `${ok ? 'finished' : 'failed'}: ${card.desc} · ${card.tools} tools` })
+  void emit($, { kind: 'agent-done', agent: card.key, src: `@${card.type}`, tone: family(card.model || 'haiku'), ok, ms: card.ms, msg: `${ok ? 'finished' : 'failed'}: ${card.desc} · ${card.tools} tools` })
   kick($)
   if (live.phase === 'agents' && !live.agents.some(a => a.status === 'running')) {
     live.phase = 'thinking'
@@ -398,8 +405,118 @@ async function flush($: EngineInterface): Promise<void> {
   await update($, pulseAtom, () => snapshot)
 }
 
+/** The turn in progress, if any. */
+function openTurn(): PulseTurn | undefined {
+  const t = live.turnLog[live.turnLog.length - 1]
+  return t && t.end === undefined ? t : undefined
+}
+
+const turnBase = { cost: 0, inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0 }
+let lastTick = 0
+let lastSample = 0
+
 function tick($: EngineInterface): void {
+  const now = Date.now()
+  const dt = lastTick ? Math.min(1000, now - lastTick) : 0
+  lastTick = now
+  // where the turn's time goes: thinking, writing, or tools and subagents
+  const t = openTurn()
+  if (t && dt) {
+    if (live.phase === 'thinking') t.think += dt
+    else if (live.phase === 'writing') t.write += dt
+    else if (live.phase === 'tool' || live.phase === 'agents') t.tools += dt
+  }
+  // a sample every ten seconds for the charts
+  if (now - lastSample >= 10000) {
+    lastSample = now
+    live.history.push({ t: now, cost: io.costUsd, out: live.outTok, ctx: io.ctxPct, calls: live.toolCount })
+    if (live.history.length > MAX_SAMPLES) live.history.splice(0, live.history.length - MAX_SAMPLES)
+    touch()
+  }
   void flush($)
+}
+
+function beginTurn(): void {
+  turnBase.cost = io.costUsd
+  turnBase.inTok = live.inTok
+  turnBase.outTok = live.outTok
+  turnBase.cacheRead = live.cacheRead
+  turnBase.cacheWrite = live.cacheWrite
+  live.turnLog.push({
+    n: live.turns,
+    start: Date.now(),
+    think: 0,
+    write: 0,
+    tools: 0,
+    calls: 0,
+    errors: 0,
+    cats: {},
+    files: 0,
+    agents: 0,
+    cost: 0,
+    inTok: 0,
+    outTok: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  })
+  if (live.turnLog.length > MAX_TURNS) live.turnLog.splice(0, live.turnLog.length - MAX_TURNS)
+}
+
+async function endTurn($: EngineInterface, aborted: boolean): Promise<PulseTurn | undefined> {
+  const t = openTurn()
+  if (!t) return undefined
+  // the cost the status line has now, not the one read a second ago
+  try {
+    const u = await $.session.usage()
+    io.costUsd = u.cost?.usd ?? io.costUsd
+  } catch {
+    // keep the last figure
+  }
+  t.end = Date.now()
+  t.ms = t.end - t.start
+  if (aborted) t.aborted = true
+  t.cost = Math.max(0, io.costUsd - turnBase.cost)
+  t.inTok = live.inTok - turnBase.inTok
+  t.outTok = live.outTok - turnBase.outTok
+  t.cacheRead = live.cacheRead - turnBase.cacheRead
+  t.cacheWrite = live.cacheWrite - turnBase.cacheWrite
+  return t
+}
+
+let pendingAsk: PulseAttention | undefined
+
+/** A prompt is on the person's screen: the kept ask becomes "needs you". */
+function promoteAsk($: EngineInterface, tool: string): void {
+  if (live.attention?.kind === 'permission') return
+  const a = pendingAsk && (!tool || pendingAsk.tool === tool || !pendingAsk.tool) ? pendingAsk : pendingAsk ?? { kind: 'permission' as const, tool: tool || 'a tool', label: '', since: Date.now() }
+  setAttention($, { ...a, since: Date.now() })
+}
+
+function attentionText(a: PulseAttention): string {
+  if (a.kind === 'permission') return `allow ${a.tool} ${a.label}`
+  if (a.kind === 'question') return 'a question'
+  return 'a plan to approve'
+}
+
+function setAttention($: EngineInterface, a: PulseAttention): void {
+  live.attention = a
+  log('main', 'warn', `needs you: ${attentionText(a)}`, 'needs you', 'warn')
+  void emit($, { kind: 'attention', src: 'main', tone: 'warn', msg: attentionText(a), attention: a })
+  kick($)
+}
+
+function clearAttention($: EngineInterface): void {
+  pendingAsk = undefined
+  if (!live.attention) return
+  const a = live.attention
+  live.attention = undefined
+  void emit($, { kind: 'attention-clear', src: 'main', tone: 'dim', ms: Date.now() - a.since, attention: a })
+  kick($)
+}
+
+/** Lines in a text, for the +/- counts of an edit. */
+function lineCount(v: unknown): number {
+  return typeof v === 'string' && v.length ? v.split('\n').length : 0
 }
 
 async function locate($: EngineInterface, cwd: string): Promise<void> {
@@ -495,6 +612,12 @@ export const register: Register = on => {
     })
     await locate($, e.cwd)
     io.ended = false
+    try {
+      const r = await $.session.repo()
+      if (r) live.repo = { root: r.root, remote: r.remote }
+    } catch {
+      // not a repository
+    }
     void $.ui.close({ id: PANE })
     timer?.cancel()
     timer = $.clock.every(250, () => {
@@ -537,6 +660,8 @@ export const register: Register = on => {
     if (!e.agentId) {
       live.turns += 1
       live.turnStarted = Date.now()
+      clearAttention($)
+      beginTurn()
       live.phase = 'thinking'
       live.activity = 'thinking'
       turnTools.n = 0
@@ -618,11 +743,34 @@ export const register: Register = on => {
       agentId: e.agentId,
       started: Date.now(),
     }
-    live.toolCount += 1
+live.toolCount += 1
     live.cats[run.cat] += 1
+    const turn = openTurn()
+    if (turn) {
+      turn.calls += 1
+      turn.cats[run.cat] = (turn.cats[run.cat] ?? 0) + 1
+    }
+    if (tool.startsWith('mcp__')) {
+      const server = tool.split('__')[1] ?? 'mcp'
+      live.mcp[server] = (live.mcp[server] ?? 0) + 1
+    }
+    // a permission granted: the call it was for is running now
+    if (live.attention?.kind === 'permission') clearAttention($)
+    if (tool === 'AskUserQuestion') setAttention($, { kind: 'question', tool, label: 'a question for you', since: Date.now(), id: run.id })
+    if (tool === 'ExitPlanMode') setAttention($, { kind: 'plan', tool, label: 'plan ready for approval', since: Date.now(), id: run.id })
     live.tools.push(run)
     if (live.tools.length > MAX_TOOLS) live.tools.splice(0, live.tools.length - MAX_TOOLS)
     const file = noteFile(run, input, card)
+    if (file) {
+      if (turn && file.edits === 1) turn.files += 1
+      const edits = Array.isArray(input['edits']) ? (input['edits'] as Array<Record<string, unknown>>) : [input]
+      if (tool === 'Write') file.added = (file.added ?? 0) + lineCount(input['content'])
+      else
+        for (const ed of edits) {
+          file.added = (file.added ?? 0) + lineCount(ed['new_string'])
+          file.removed = (file.removed ?? 0) + lineCount(ed['old_string'])
+        }
+    }
     if (card) {
       card.tools += 1
       card.current = fit(`${tool} ${run.label}`, 60)
@@ -649,7 +797,12 @@ export const register: Register = on => {
     run.out = ran.deny !== undefined ? 'denied' : ran.isError ? 'error' : outGist(tool, ran.text)
     live.toolMs += run.ms
     if (run.ok) live.okCount += 1
-    else live.errCount += 1
+    else {
+      live.errCount += 1
+      if (turn) turn.errors += 1
+    }
+    if (live.attention && live.attention.id === run.id) clearAttention($)
+    if (pendingAsk?.id === run.id) pendingAsk = undefined
     if (file) {
       file.active = false
       file.ok = run.ok
@@ -708,8 +861,11 @@ export const register: Register = on => {
       outTok: 0,
       current: 'starting',
       started: Date.now(),
+      parent: agentFor(e.parentAgentId)?.key,
     }
     live.agents.push(card)
+    const turnNow = openTurn()
+    if (turnNow) turnNow.agents += 1
     if (live.agents.length > MAX_AGENTS) {
       const doneIdx = live.agents.findIndex(a => a.status !== 'running')
       live.agents.splice(doneIdx >= 0 ? doneIdx : 0, 1)
@@ -717,7 +873,7 @@ export const register: Register = on => {
     live.phase = 'agents'
     live.activity = `waiting on @${card.type}`
     log('main', family(live.model || 'opus'), `started @${card.type}: ${card.desc}`, 'agent', 'haiku')
-    void emit($, { kind: 'agent', src: 'main', tone: 'haiku', msg: `started @${card.type}: ${card.desc}` })
+    void emit($, { kind: 'agent', agent: card.key, label: card.parent, src: 'main', tone: 'haiku', msg: `started @${card.type}: ${card.desc}` })
     kick($)
 
     const r = await next(e)
@@ -736,9 +892,73 @@ export const register: Register = on => {
     return r
   })
 
+// a permission prompt: the session waits for the person
+  // An ask is only a question for the mode's decider: in auto mode the
+  // classifier usually settles it with no prompt at all. So an ask is kept
+  // aside, and becomes "needs you" only when a prompt is really put to the person.
+  on('tool.check', async ($, e, next) => {
+    const r = await next(e)
+    if (r.decision === 'ask' && !e.agentId && e.tool_use_id) {
+      const input = (e.input ?? {}) as Record<string, unknown>
+      pendingAsk = { kind: 'permission', tool: e.tool, label: labelOf(e.tool, input, io.cwd), since: Date.now(), id: e.tool_use_id }
+    }
+    return r
+  })
+
+  // the permission dialog is about to show (in auto mode the classifier may still settle it)
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const r = await next(e)
+    const mode = String((e as unknown as { permission_mode?: string }).permission_mode ?? '')
+    const decided = (r as unknown as { decision?: unknown } | undefined)?.decision !== undefined
+    if (!decided && !['auto', 'bypassPermissions', 'dontAsk'].includes(mode)) promoteAsk($, String((e as unknown as { tool_name?: string }).tool_name ?? ''))
+    return r
+  })
+
+  // Claude Code tells the person it waits for their permission: certain
+  on('classic.Notification', async ($, e, next) => {
+    const n = e as unknown as { notification_type?: string; message?: string }
+    if (n.notification_type === 'permission_prompt' || /permission/i.test(n.message ?? '')) {
+      const tool = /use (\S+)/.exec(n.message ?? '')?.[1] ?? ''
+      promoteAsk($, tool)
+    }
+    return next(e)
+  })
+
+  // refused: nothing waits any more
+  on('classic.PermissionDenied', async ($, e, next) => {
+    pendingAsk = undefined
+    if (live.attention?.kind === 'permission') clearAttention($)
+    return next(e)
+  })
+
+  // the conversation compacted: how much context it freed
+  on('session.compact', async ($, e, next) => {
+    const before = live.context
+    const r = await next(e)
+    let after: number | undefined
+    try {
+      after = (await $.session.usage()).context.tokens
+      if (after !== undefined) live.context = after
+    } catch {
+      // the next tick reads it
+    }
+    if (!e.agentId) {
+      live.compacts.push({ t: Date.now(), trigger: e.trigger, before, after })
+      if (live.compacts.length > MAX_COMPACTS) live.compacts.splice(0, live.compacts.length - MAX_COMPACTS)
+      const freed = after !== undefined ? `: ${Math.round(before / 1000)}k → ${Math.round(after / 1000)}k` : ''
+      log('main', 'warn', `context compacted (${e.trigger})${freed}`, 'compact', 'warn')
+      void emit($, { kind: 'compact', src: 'main', tone: 'warn', msg: `compacted (${e.trigger})`, label: e.trigger })
+      kick($)
+    }
+    return r
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId) {
       await releaseFiles($)
+      clearAttention($)
+      const done = await endTurn($, e.isAborted)
+      if (done) void emit($, { kind: 'turn-summary', src: 'main', tone: e.isAborted ? 'warn' : 'ok', turn: done })
       live.phase = 'idle'
       live.lastTurnMs = e.durationMs
       live.activity = ''

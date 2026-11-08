@@ -11,6 +11,7 @@ export const win = {
   cover: true, // fill the monitor's free area (true) or stay a normal window (false)
   monitor: 0,
   monitors: 1,
+  front: true, // the window is the one in front (alerts stay on screen then)
 }
 
 let ps
@@ -98,5 +99,6 @@ export async function watch() {
   if (!r?.ok) return
   win.monitors = r.monitors
   win.monitor = r.monitor
+  win.front = !!r.front && !r.min
   if (win.cover && !r.min && !covers(r) && Date.now() - placedAt > 3000) win.cover = false
 }

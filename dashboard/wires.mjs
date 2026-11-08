@@ -1,6 +1,7 @@
 // Wires that join into ┬ ┴ ├ ┤ ┼ where they meet, sparks that run along
 // them in either direction, and dotted curves.
 import { P, mix } from './common.mjs'
+import { Braille } from './braille.mjs'
 
 const U = 1
 const D = 2
@@ -116,9 +117,9 @@ export function curveCells(a, c, b) {
 /** A dotted curve with sparks riding it. */
 export function curve(S, a, c, b, color, t, o = {}) {
   const pts = curveCells(a, c, b)
-  pts.forEach(([x, y], i) => {
-    if (i % 2 === 0) S.set(x, y, o.dot ?? '·', mix(color, S.getBg(x, y), o.fade ?? 0.35), S.getBg(x, y))
-  })
+  const br = new Braille(S)
+  br.bezier(a, c, b, mix(color, P.bg, o.fade ?? 0.35))
+  br.flush()
   if (o.end !== false) S.set(b[0], b[1], '●', color, S.getBg(b[0], b[1]), true)
   sparks(S, pts, t, o.spark ?? P.cream, { speed: o.speed ?? 26, tail: 5, gap: o.gap ?? 14, dir: o.dir, n: o.n })
   return pts

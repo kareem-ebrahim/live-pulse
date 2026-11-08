@@ -193,5 +193,9 @@ export function emptyPulse(now: number): Pulse {
     bg: [],
     log: [],
     startedAt: now,
+    turnLog: [],
+    history: [],
+    compacts: [],
+    mcp: {},
   }
 }

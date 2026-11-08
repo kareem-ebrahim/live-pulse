@@ -63,7 +63,10 @@ const BADGE = {
   'turn-done': ['DONE', P.ok],
   'agent-done': ['AGNT', P.haiku],
   note: ['NOTE', P.dim],
+  attention: ['YOU!', P.warn],
+  compact: ['CMPT', P.warn],
 }
+const HIDDEN = new Set(['turn-summary', 'attention-clear'])
 const BG = hx('#0c1016')
 const PANEL = hx('#0e1319')
 
@@ -88,13 +91,13 @@ function itemsFor(st, kind = logUi.kind) {
   const key = [store.version, store.sessions.length, logUi.scope, st.sessionId, kind, logUi.agent, logUi.file].join('|')
   if (cache.key !== key) {
     const base = logUi.scope === 'session' && st.sessionId ? itemsOf(st.sessionId) : allItems()
-    cache = { key, items: base.filter(it => kindMatch(it, kind) && agentMatch(it, logUi.agent) && fileMatch(it, logUi.file)) }
+    cache = { key, items: base.filter(it => !HIDDEN.has(it.kind) && kindMatch(it, kind) && agentMatch(it, logUi.agent) && fileMatch(it, logUi.file)) }
   }
   return cache.items
 }
 function countFor(st, kind) {
   const base = logUi.scope === 'session' && st.sessionId ? itemsOf(st.sessionId) : allItems()
-  return base.filter(it => kindMatch(it, kind) && agentMatch(it, logUi.agent) && fileMatch(it, logUi.file)).length
+  return base.filter(it => !HIDDEN.has(it.kind) && kindMatch(it, kind) && agentMatch(it, logUi.agent) && fileMatch(it, logUi.file)).length
 }
 
 let lastSt = { sessionId: '' }
