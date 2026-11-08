@@ -1,5 +1,16 @@
 {
   "name": "live-pulse",
-  "owner": { "name": "Kareem Ebrahim" },
-  "plugins": [{ "name": "live-pulse", "source": "./" }]
+  "owner": {
+    "name": "Kareem Ebrahim"
+  },
+  "plugins": [
+    {
+      "name": "live-pulse",
+      "source": "./",
+      "description": "A live mission-control screen for Claude Code on Windows: every session as an animated creature, seven pages (timeline, network, files, cost, inspector, machine-wide totals), an AUTO tour mode, and Windows alerts when a session needs you."
+    }
+  ],
+  "metadata": {
+    "description": "Live Pulse: a live mission-control screen for Claude Code on Windows."
+  }
 }
