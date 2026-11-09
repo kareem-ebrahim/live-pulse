@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Pulse · mission control for Claude Code</title>
+<meta name="description" content="A live mission-control screen for Claude Code on Windows: every session, helper agent, file and dollar on one animated screen, with an AUTO tour mode and alerts when a session needs you.">
+<meta property="og:title" content="Live Pulse · mission control for Claude Code">
+<meta property="og:description" content="Watch every Claude Code session on your computer work in real time, on one beautiful animated screen.">
+<meta property="og:image" content="https://kareem-ebrahim.github.io/live-pulse/assets/page-overview.png">
+<meta name="theme-color" content="#0b0f14">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #0e1319; --line: #1d252f; --text: #eff5fa; --mid: #9aa5b1; --dim: #5b6570;
+    --coral: #d06d58; --haiku: #6dc0ff; --opus: #bbb3f1; --router: #82edab; --warn: #e3b341; --cream: #f2ece4; --peach: #e8b48a;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  .mono { font-family: "JetBrains Mono", Consolas, monospace; }
+
+  /* background glow */
+  .glow { position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    background: radial-gradient(900px 500px at 15% -10%, rgba(130,237,171,.10), transparent 60%),
+                radial-gradient(800px 500px at 90% 0%, rgba(187,179,241,.12), transparent 60%),
+                radial-gradient(700px 600px at 50% 110%, rgba(208,109,88,.08), transparent 60%); }
+
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: .2px; text-decoration: none; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--router); box-shadow: 0 0 0 0 rgba(130,237,171,.6); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(130,237,171,.55); } 70% { box-shadow: 0 0 0 12px rgba(130,237,171,0); } 100% { box-shadow: 0 0 0 0 rgba(130,237,171,0); } }
+  nav .links a { color: var(--mid); text-decoration: none; margin-left: 22px; font-size: 15px; }
+  nav .links a:hover { color: var(--text); }
+
+  header { text-align: center; padding: 48px 0 28px; }
+  .pill { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; color: var(--mid); border: 1px solid var(--line); background: rgba(14,19,25,.7); padding: 6px 14px; border-radius: 99px; }
+  .pill b { color: var(--router); font-weight: 600; }
+  h1 { font-size: clamp(38px, 7vw, 68px); line-height: 1.05; margin: 22px 0 16px; letter-spacing: -1.5px; font-weight: 800; }
+  h1 .grad { background: linear-gradient(90deg, var(--router), var(--haiku) 45%, var(--opus) 75%, var(--coral)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: var(--mid); font-size: clamp(17px, 2.2vw, 20px); max-width: 720px; margin: 0 auto; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 13px 22px; border-radius: 12px; font-weight: 600; text-decoration: none; font-size: 15px; transition: transform .15s, background .15s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn.primary { background: var(--router); color: #07130c; }
+  .btn.ghost { border: 1px solid var(--line); background: rgba(14,19,25,.8); }
+  .meta { margin-top: 18px; color: var(--dim); font-size: 13.5px; }
+
+  .video { margin: 40px auto 0; border-radius: 16px; overflow: hidden; border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(130,237,171,.05), 0 0 80px rgba(130,237,171,.08); background: #000; }
+  .video video { display: block; width: 100%; height: auto; }
+
+  section { padding: 80px 0 10px; }
+  .kicker { color: var(--router); font: 600 13px "JetBrains Mono", monospace; letter-spacing: 1.5px; text-transform: uppercase; }
+  h2 { font-size: clamp(28px, 4vw, 40px); margin: 10px 0 14px; letter-spacing: -.6px; line-height: 1.15; }
+  .sub { color: var(--mid); max-width: 720px; margin: 0 0 34px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: linear-gradient(180deg, rgba(20,27,36,.9), rgba(14,19,25,.9)); border: 1px solid var(--line); border-radius: 14px; padding: 22px; position: relative; overflow: hidden; }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--c, var(--router)); }
+  .card .ico { font: 700 20px "JetBrains Mono", monospace; color: var(--c, var(--router)); }
+  .card h3 { margin: 10px 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--mid); font-size: 15px; }
+
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+  .tab { font: 600 13.5px "JetBrains Mono", monospace; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--mid); cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--opus); color: #120f24; border-color: var(--opus); }
+  .shot { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #000; box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+  .shot img { display: block; width: 100%; height: auto; }
+  .caption { margin-top: 14px; color: var(--mid); min-height: 52px; }
+  .caption b { color: var(--text); }
+
+  .steps { counter-reset: s; display: grid; gap: 14px; }
+  .step { display: grid; grid-template-columns: 44px 1fr; gap: 16px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .step::before { counter-increment: s; content: counter(s); width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font: 700 18px "JetBrains Mono", monospace; background: rgba(130,237,171,.12); color: var(--router); }
+  .step h3 { margin: 2px 0 6px; font-size: 17px; }
+  .step p { margin: 0; color: var(--mid); }
+  code, .code { font-family: "JetBrains Mono", Consolas, monospace; }
+  .code { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; background: #070a0e; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 14px; color: var(--cream); overflow-x: auto; }
+  .copy { flex: none; font: 600 12px Inter, sans-serif; color: var(--mid); border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .fact { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: rgba(14,19,25,.6); }
+  .fact b { display: block; font-size: 15px; }
+  .fact span { color: var(--mid); font-size: 14px; }
+
+  footer { margin-top: 90px; border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--dim); font-size: 14px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  footer a { color: var(--mid); }
+
+  @media (max-width: 640px) {
+    nav .links a:not(.gh) { display: none; }
+    header { padding-top: 24px; }
+    section { padding-top: 60px; }
+    .step { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#"><span class="dot"></span> Live Pulse</a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#pages">Pages</a>
+      <a href="#install">Install</a>
+      <a class="gh" href="https://github.com/kareem-ebrahim/live-pulse">GitHub ↗</a>
+    </div>
+  </nav>
+
+  <header>
+    <span class="pill"><b>v0.1.7</b> · free &amp; open source · for Claude Code on Windows</span>
+    <h1>Mission control for<br><span class="grad">Claude Code</span></h1>
+    <p class="lead">Watch every Claude Code session on your computer work in real time, on one beautiful animated screen: what each one is doing, which files it changes, what it costs, and the moment it needs you.</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Install in one line</a>
+      <a class="btn ghost" href="#demo">▶ Watch the demo</a>
+    </div>
+    <div class="meta">Uses no tokens · nothing leaves your computer · never records what you type</div>
+  </header>
+
+  <div class="video" id="demo">
+    <video controls playsinline muted autoplay loop preload="metadata" poster="assets/poster.jpg">
+      <source src="assets/demo.mp4" type="video/mp4">
+    </video>
+  </div>
+
+  <section id="features">
+    <div class="kicker">What it does</div>
+    <h2>Everything your AI is doing, at a glance</h2>
+    <p class="sub">Put it on a second monitor and keep working. Live Pulse shows every session as a living creature and turns all the activity into something you can read in a second.</p>
+    <div class="grid">
+      <div class="card" style="--c: var(--coral)"><div class="ico">◉</div><h3>A creature per session</h3><p>Each session moves while it works, sleeps when idle, and raises a bubble when it needs you.</p></div>
+      <div class="card" style="--c: var(--haiku)"><div class="ico">⟶</div><h3>Every step, live</h3><p>The files it reads, the code it changes and the commands it runs, as they happen.</p></div>
+      <div class="card" style="--c: var(--opus)"><div class="ico">◆</div><h3>Helper agents</h3><p>When Claude starts a helper agent, a new creature is born, wired to the session that started it.</p></div>
+      <div class="card" style="--c: var(--cream)"><div class="ico">$</div><h3>Cost and limits</h3><p>What each session costs, how fast it spends, and when your 5-hour limit will run out at this pace.</p></div>
+      <div class="card" style="--c: var(--warn)"><div class="ico">!</div><h3>Alerts that matter</h3><p>A Windows notification with a sound when a session needs your approval, even if you are in another app.</p></div>
+      <div class="card" style="--c: var(--router)"><div class="ico">⟳</div><h3>AUTO mode</h3><p>The screen tours its pages by itself and jumps to whatever just happened, like a control room.</p></div>
+      <div class="card" style="--c: var(--peach)"><div class="ico">⚿</div><h3>No clashing edits</h3><p>Two sessions never edit the same file at once: the second waits for the first to finish.</p></div>
+      <div class="card" style="--c: var(--haiku)"><div class="ico">Σ</div><h3>Totals for your machine</h3><p>All tokens and money across every project on your computer, with each project's share.</p></div>
+    </div>
+  </section>
+
+  <section id="pages">
+    <div class="kicker">Seven pages</div>
+    <h2>A page for every question</h2>
+    <p class="sub">Switch with the tabs or the keys F1 to F7. Or press AUTO and let it switch for you.</p>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div class="shot"><img id="shot" src="assets/page-overview.png" alt="Live Pulse Overview page"></div>
+    <p class="caption" id="caption"></p>
+  </section>
+
+  <section id="install">
+    <div class="kicker">Get started</div>
+    <h2>Install in a minute</h2>
+    <p class="sub">You need Windows 10 or 11 with Windows Terminal, Node.js 18 or newer, and Claude Code.</p>
+    <div class="steps">
+      <div class="step"><div><h3>Install the plugin</h3><p>In Claude Code, type this and choose <b>Install for you (user scope)</b>:</p>
+        <div class="code"><span>/plugin install live-pulse --marketplace kareem-ebrahim/live-pulse</span><button class="copy" data-copy="/plugin install live-pulse --marketplace kareem-ebrahim/live-pulse">Copy</button></div></div></div>
+      <div class="step"><div><h3>Restart Claude Code</h3><p>Close it and open it again. The Live Pulse window opens by itself. If it does not, type <code>/pulse</code>.</p></div></div>
+      <div class="step"><div><h3>Put it on your second screen</h3><p>Drag the window there, or press <code>M</code>. Every session you open from now on appears in it.</p></div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker">Good to know</div>
+    <h2>Light, private and free</h2>
+    <div class="facts">
+      <div class="fact"><b>Uses no tokens</b><span>It never calls the AI and adds nothing to your conversation.</span></div>
+      <div class="fact"><b>Stays on your computer</b><span>No servers, no accounts, nothing sent anywhere.</span></div>
+      <div class="fact"><b>Never reads your prompts</b><span>It records what a session does, not what you type.</span></div>
+      <div class="fact"><b>Free and open source</b><span>MIT licence. No dependencies, plain Node.js.</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Live Pulse · made by <a href="https://github.com/kareem-ebrahim">Kareem Ebrahim</a></span>
+    <span><a href="https://github.com/kareem-ebrahim/live-pulse">Source on GitHub</a> · <a href="https://github.com/kareem-ebrahim/live-pulse/releases/latest">Releases</a></span>
+  </footer>
+</div>
+
+<script>
+  const PAGES = [
+    ['F1', 'Overview', 'page-overview.png', '<b>Every session at a glance.</b> A creature for each session, its helper agents wired to the files they edit, and the activity log with real code changes.'],
+    ['F2', 'Timeline', 'page-timeline.png', '<b>What happened, and when.</b> A lane per session and per helper agent, every tool call as a coloured bar, and arrows for who started whom.'],
+    ['F3', 'Network', 'page-network.png', '<b>Who talks to what.</b> Sessions and agents, tools and files as cards, joined by links with flowing particles, plus the busiest links and health.'],
+    ['F4', 'Files', 'page-files.png', '<b>Which files are changing.</b> Edits, lines added and removed, git state per project, file locks and edits per minute.'],
+    ['F5', 'Cost', 'page-cost.png', '<b>What it costs, and how fast.</b> Spend per session, your plan limits with a projection, and an hour of spending per minute.'],
+    ['F6', 'Inspector', 'page-inspector.png', '<b>One session in depth.</b> Every turn timed, its calls, tokens and cost, the helper agent tree, and every time it waited for you.'],
+    ['F7', 'Totals', 'page-totals.png', '<b>Your whole machine.</b> All tokens and money across every project, each project\'s share, the models used and the last 30 days.'],
+  ]
+  const tabs = document.getElementById('tabs')
+  const shot = document.getElementById('shot')
+  const caption = document.getElementById('caption')
+  function show(i) {
+    const [, name, file, text] = PAGES[i]
+    shot.src = 'assets/' + file
+    shot.alt = 'Live Pulse ' + name + ' page'
+    caption.innerHTML = text
+    ;[...tabs.children].forEach((b, j) => b.setAttribute('aria-selected', String(i === j)))
+  }
+  PAGES.forEach(([key, name], i) => {
+    const b = document.createElement('button')
+    b.className = 'tab'
+    b.setAttribute('role', 'tab')
+    b.textContent = key + ' ' + name
+    b.onclick = () => show(i)
+    tabs.appendChild(b)
+  })
+  show(0)
+  // preload the other screenshots
+  PAGES.forEach(p => { const im = new Image(); im.src = 'assets/' + p[2] })
+  document.querySelectorAll('.copy').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied' } catch { b.textContent = 'Select & copy' }
+    setTimeout(() => (b.textContent = 'Copy'), 1500)
+  })
+</script>
+</body>
+</html>
